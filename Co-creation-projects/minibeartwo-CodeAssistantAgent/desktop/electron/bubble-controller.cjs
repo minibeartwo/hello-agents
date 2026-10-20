@@ -66,7 +66,19 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
       partition: 'floating-launcher',
     },
   });
-  bubble.setAlwaysOnTop(true, 'floating');
+  function maintainNativeBounds() {
+    // Electron on Windows can ignore an explicit floating level before first show.
+    if (process.platform === 'win32') {
+      bubble.setAlwaysOnTop(true);
+      if (!bubble.isAlwaysOnTop()) bubble.setAlwaysOnTop(true, 'screen-saver');
+    } else bubble.setAlwaysOnTop(true, 'floating');
+    const bounds = bubble.getBounds();
+    if (bounds.width !== SIZE || bounds.height !== SIZE) {
+      bubble.setBounds({ ...boundedPosition(bounds), width: SIZE, height: SIZE }, false);
+    }
+  }
+  maintainNativeBounds();
+  bubble.on('show', maintainNativeBounds);
   bubble.setMenu(null);
   bubble.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   bubble.webContents.on('will-navigate', (event) => event.preventDefault());

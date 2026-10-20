@@ -27,92 +27,77 @@ body {
 .bubble {
   position: relative;
   display: grid;
-  width: 66px;
-  height: 66px;
+  width: 88px;
+  height: 88px;
   padding: 0;
   place-items: center;
-  border: 1px solid #78e3c7;
-  border-radius: 50%;
+  border: 0;
+  border-radius: 15px;
   outline: none;
-  background: radial-gradient(circle at 32% 24%, #83ebce, #51d7b4 58%, #33b995);
-  color: #102c23;
-  box-shadow:
-    0 5px 13px #0000004d,
-    0 0 0 4px #101923e6,
-    inset 0 1px 0 #dcfff39c;
+  background: transparent;
   cursor: pointer;
   touch-action: none;
-  transition:
-    transform 160ms ease,
-    box-shadow 160ms ease,
-    filter 160ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.bubble:hover {
-  transform: translateY(-1px);
-  filter: brightness(1.06);
-  box-shadow:
-    0 6px 15px #00000059,
-    0 0 0 4px #182c32f2,
-    inset 0 1px 0 #dcfff3b3;
+.bubble-character {
+  grid-area: 1 / 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  transform-origin: 50% 82%;
+  filter: drop-shadow(0 1px 1px #291d3540);
+  transition: filter 160ms ease;
 }
 
-.bubble:focus-visible {
-  outline: 2px solid #dcfff4;
-  outline-offset: 7px;
+.bubble-motion {
+  visibility: hidden;
+}
+
+.bubble[data-render='canvas'] #bubble-character {
+  visibility: hidden;
+}
+
+.bubble[data-render='canvas'] .bubble-motion {
+  visibility: visible;
+}
+
+.bubble:focus-visible .bubble-character {
+  filter: drop-shadow(0 0 2px #d6c4ffa6) drop-shadow(0 1px 1px #291d3540);
 }
 
 .bubble.pressed {
   cursor: grabbing;
+}
+
+.bubble[data-render='image'].pressed #bubble-character {
   transform: scale(0.96);
 }
 
-.bubble.client-visible {
-  box-shadow:
-    0 5px 13px #0000004d,
-    0 0 0 4px #172b31,
-    0 0 0 5px #51d7b473,
-    inset 0 1px 0 #dcfff39c;
-}
-
-.bubble-mark {
-  padding-bottom: 1px;
-  font-size: 23px;
-  font-weight: 800;
-  letter-spacing: -1.5px;
-  line-height: 1;
-  pointer-events: none;
+.bubble.client-visible .bubble-character {
+  filter: drop-shadow(0 0 2px #b9a1f2b3) drop-shadow(0 1px 1px #291d3540);
 }
 
 .bubble-status {
   position: absolute;
-  right: 0;
-  bottom: 1px;
-  width: 13px;
-  height: 13px;
-  border: 3px solid #14212c;
+  right: 8px;
+  bottom: 8px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid #fff8e8;
   border-radius: 50%;
-  background: #baffdc;
-  box-shadow: 0 1px 3px #0000004d;
-  pointer-events: none;
-}
-
-.bubble-orbit {
-  position: absolute;
-  inset: 5px;
-  border: 1px solid #eafff326;
-  border-radius: 50%;
+  background: #8bcdb1;
+  box-shadow: 0 1px 2px #291d3540;
   pointer-events: none;
 }
 
 .bubble.connecting .bubble-status {
-  background: #efca80;
+  background: #efbf68;
   animation: breathe 1.5s ease-in-out infinite;
-}
-
-.bubble.connecting .bubble-orbit {
-  border-top-color: #effff2a6;
-  animation: orbit 2.8s linear infinite;
 }
 
 @keyframes breathe {
@@ -121,17 +106,14 @@ body {
   }
 }
 
-@keyframes orbit {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .bubble,
-  .bubble-status,
-  .bubble-orbit {
+  .bubble-character,
+  .bubble-status {
     transition: none;
     animation: none !important;
+  }
+
+  .bubble[data-render='image'].pressed #bubble-character {
+    transform: none;
   }
 }
