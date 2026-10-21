@@ -80,6 +80,7 @@ async function nativeState() {
         mainMinimized: main.isMinimized(),
         mainOpacity: main.getOpacity(),
         mainZoom: main.webContents.getZoomFactor(),
+        mainBounds: main.getBounds(),
         bubbleVisible: bubble.isVisible(),
         bubbleOpacity: bubble.getOpacity(),
         bubbleZoom: bubble.webContents.getZoomFactor(),
@@ -110,6 +111,22 @@ function assertWithinWorkArea(state) {
     box.y + box.height <= area.y + area.height - marginY,
     `launcher bottom edge is visible: ${JSON.stringify({ box, area })}`,
   );
+}
+
+function assertClientBesideBubble(state) {
+  const client = state.mainBounds;
+  const bubble = state.bubbleBounds;
+  const work = state.workArea;
+  const tolerance = 3;
+  assert.ok(client.x >= work.x - tolerance && client.y >= work.y - tolerance &&
+    client.x + client.width <= work.x + work.width + tolerance &&
+    client.y + client.height <= work.y + work.height + tolerance,
+    'the client stays inside the mascot display work area');
+  assert.ok(client.x >= bubble.x + bubble.width + 12 - tolerance ||
+    client.x + client.width <= bubble.x - 12 + tolerance ||
+    client.y >= bubble.y + bubble.height + 12 - tolerance ||
+    client.y + client.height <= bubble.y - 12 + tolerance,
+    'the client opens beside the mascot without covering it');
 }
 
 // Walk the actual GIF container instead of trusting its extension or a frame-count comment.
@@ -465,7 +482,43 @@ async function closeThroughMenu() {
   application = null;
 }
 
+async function inspectClientPlacement() {
+  const controller = { exports: {} };
+  runInNewContext(await readFile(path.join(desktop, 'electron/bubble-controller.cjs'), 'utf8'), {
+    module: controller,
+    require: () => ({}),
+  });
+  const client = { width: 650, height: 500 };
+  const work = { x: 0, y: 0, width: 1536, height: 824 };
+  const cases = [
+    { name: 'right edge', work, anchor: { x: 1416, y: 350, width: 96, height: 96 }, side: 'left' },
+    { name: 'left edge', work, anchor: { x: 24, y: 350, width: 96, height: 96 }, side: 'right' },
+    { name: 'top edge', work, anchor: { x: 1416, y: 8, width: 96, height: 96 } },
+    { name: 'bottom edge', work, anchor: { x: 1416, y: 720, width: 96, height: 96 } },
+    { name: 'negative monitor coordinates', work: { x: -1280, y: 100, width: 1280, height: 800 },
+      anchor: { x: -1256, y: 300, width: 96, height: 96 }, side: 'right' },
+    { name: 'monitor above primary', work: { x: 0, y: -900, width: 1600, height: 900 },
+      anchor: { x: 1450, y: -120, width: 96, height: 96 } },
+    { name: 'vertical fallback', work: { x: 0, y: 0, width: 1000, height: 900 },
+      anchor: { x: 450, y: 12, width: 96, height: 96 }, side: 'below' },
+  ];
+  for (const fixture of cases) {
+    const position = controller.exports.getClientPosition(fixture.anchor, client, fixture.work);
+    const bounds = { ...position, ...client };
+    assertClientBesideBubble({ mainBounds: bounds, bubbleBounds: fixture.anchor, workArea: fixture.work });
+    assert.ok(bounds.x >= fixture.work.x + 8 && bounds.y >= fixture.work.y + 8 &&
+      bounds.x + bounds.width <= fixture.work.x + fixture.work.width - 8 &&
+      bounds.y + bounds.height <= fixture.work.y + fixture.work.height - 8,
+      `${fixture.name}: keep clear of work-area edges`);
+    if (fixture.side === 'left') assert.ok(bounds.x + bounds.width < fixture.anchor.x);
+    if (fixture.side === 'right') assert.ok(bounds.x > fixture.anchor.x + fixture.anchor.width);
+    if (fixture.side === 'below') assert.ok(bounds.y > fixture.anchor.y + fixture.anchor.height);
+  }
+  checks.push('client placement covers all edges, negative monitor coordinates, and vertical fallback');
+}
+
 try {
+  await inspectClientPlacement();
   const animation = await inspectMascotAssets();
   let state = await launch();
   const initialMainId = state.mainId;
@@ -473,7 +526,7 @@ try {
   assert.equal(state.bubbleVisible, false, 'QA hidden mode hides the bubble as well');
   assert.equal(state.mainOpacity, 0, 'the QA client never appears on the shared desktop');
   assert.equal(state.bubbleOpacity, 0, 'the QA launcher never appears on the shared desktop');
-  assert.equal(state.mainZoom, 0.875, 'the client keeps its compact scale');
+  assert.equal(state.mainZoom, 0.65625, 'the client keeps its compact scale');
   assert.equal(state.bubbleZoom, 1, 'the mascot retains its independent native scale');
   assert.equal(state.bubbleBounds.width, 96);
   assert.equal(state.bubbleBounds.height, 96);
@@ -498,6 +551,11 @@ try {
     async () => (await nativeState()).mainVisible,
     'Clicking the bubble must open the client',
   );
+  await eventually(async () => {
+    assertClientBesideBubble(await nativeState());
+    return true;
+  }, 'The client must open beside Phoebe rather than at the desktop center');
+  checks.push('native client opens beside Phoebe and stays within the same display work area');
   await application.evaluate(({ dialog }, folder) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
   }, workspace);
@@ -527,6 +585,7 @@ try {
     'Bubble must reopen the same client',
   );
   assert.equal((await nativeState()).mainId, initialMainId);
+  assertClientBesideBubble(await nativeState());
   assert.equal(
     await mainPage.getByRole('textbox', { name: '任务需求', exact: true }).inputValue(),
     'Keep this unsent draft while the client is tucked away.',

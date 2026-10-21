@@ -99,11 +99,13 @@ const homeChecks = [];
 async function launch() {
   const instance = await electron.launch({ args: [desktop], cwd: desktop, env, timeout: 60000 });
   app = instance;
-  await instance.evaluate(({ BrowserWindow }) => {
-    for (const window of BrowserWindow.getAllWindows()) {
+  await instance.evaluate(({ app, BrowserWindow }) => {
+    const isolateWindow = (window) => {
       window.setOpacity(0);
       window.setIgnoreMouseEvents(true);
-    }
+    };
+    app.on('browser-window-created', (_event, window) => isolateWindow(window));
+    for (const window of BrowserWindow.getAllWindows()) isolateWindow(window);
   });
   await instance.firstWindow({ timeout: 60000 });
   let page;
@@ -173,16 +175,18 @@ const exists = async (file) => access(file).then(() => true, () => false);
 
 async function inspectHome(page, application) {
   await assertNoLegacyInterface(page);
-  const native = await application.evaluate(({ BrowserWindow }) => {
+  const native = await application.evaluate(({ BrowserWindow, screen }) => {
     const windows = BrowserWindow.getAllWindows();
     const main = windows.find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手');
     const bubble = windows.find((entry) => entry.getTitle() === 'CodeAssistantAgent · 菲比桌面助手');
     return { bounds: main.getContentBounds(), zoom: main.webContents.getZoomFactor(),
+      displayScale: screen.getDisplayMatching(main.getBounds()).scaleFactor,
       bubbleZoom: bubble.webContents.getZoomFactor() };
   });
-  assert.equal(native.bounds.width, 896, 'the client opens at the reduced native width');
-  assert.equal(native.bounds.height, 672, 'the client retains its native 4:3 aspect ratio');
-  assert.equal(native.zoom, 0.875, 'the whole client scales uniformly with its window');
+  // Windows may round both rectangle edges when converting fractional display scales.
+  assert.ok(Math.abs(native.bounds.width - 650) <= 2, 'the client opens at the requested width within display rounding');
+  assert.ok(Math.abs(native.bounds.height - 500) <= 2, 'the client opens at the requested height within display rounding');
+  assert.equal(native.zoom, 0.65625, 'the whole client scales uniformly with its window');
   assert.equal(native.bubbleZoom, 1, 'client scaling does not change the desktop mascot');
   const title = await page.locator('.client-titlebar').innerText();
   assert.match(title, /代码助手/);
@@ -196,8 +200,8 @@ async function inspectHome(page, application) {
     return { width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth,
       scrollHeight: document.documentElement.scrollHeight, boxes };
   });
-  assert.equal(layout.width, 1024, 'the scaled client preserves the approved logical layout width');
-  assert.equal(layout.height, 768, 'the scaled client preserves the approved logical layout height');
+  assert.ok(Math.abs(layout.width * native.zoom - native.bounds.width) < 1, 'the renderer fits the native client width');
+  assert.ok(Math.abs(layout.height * native.zoom - native.bounds.height) < 1, 'the renderer fits the native client height');
   assert.ok(layout.scrollWidth <= layout.width && layout.scrollHeight <= layout.height,
     'the three home controls fit without scrolling');
   const [drop, comment, analysis] = layout.boxes;
@@ -209,16 +213,20 @@ async function inspectHome(page, application) {
   }
   await page.evaluate(() => document.fonts.ready);
   await page.screenshot({ path: path.join(artifacts, 'home.png') });
-  assert.deepEqual(await nativeScreenshot(application, 'home-native.png'), { width: 896, height: 672 },
-    'native capture confirms the smaller visible client');
-  homeChecks.push('896×672 native client at 87.5% scale preserves approved 4:3 layout; mascot scale unchanged');
+  const capture = await nativeScreenshot(application, 'home-native.png');
+  assert.ok(Math.abs(capture.width - native.bounds.width * native.displayScale) <= 1 &&
+    Math.abs(capture.height - native.bounds.height * native.displayScale) <= 1,
+    'native capture confirms the requested client size within physical-pixel rounding');
+  homeChecks.push('650×500 native client at 65.625% scale; mascot scale unchanged');
   await application.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手').setSize(800, 600));
-  await page.waitForFunction(() => Math.abs(innerWidth * 0.875 - 800) < 1 && Math.abs(innerHeight * 0.875 - 600) < 1);
-  assert.deepEqual(await application.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手').setSize(640, 480));
+  await page.waitForFunction(() => Math.abs(innerWidth * 0.65625 - 640) <= 2 && Math.abs(innerHeight * 0.65625 - 480) <= 2);
+  const minimumSize = await application.evaluate(({ BrowserWindow }) => {
     const { width, height } = BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手').getContentBounds();
     return { width, height };
-  }), { width: 800, height: 600 }, 'the resized native client reaches its supported minimum');
+  });
+  assert.ok(Math.abs(minimumSize.width - 640) <= 2 && Math.abs(minimumSize.height - 480) <= 2,
+    'the resized native client reaches its supported minimum within display rounding');
   const minimumFits = await page.evaluate(() => {
     const inside = (inner, outer) => inner.left >= outer.left - 1 && inner.top >= outer.top - 1 &&
       inner.right <= outer.right + 1 && inner.bottom <= outer.bottom + 1;
@@ -236,9 +244,9 @@ async function inspectHome(page, application) {
   assert.equal(minimumFits, true, 'home controls and labels fit at the minimum supported window size');
   await page.screenshot({ path: path.join(artifacts, 'home-min.png') });
   await application.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手').setSize(896, 672));
-  await page.waitForFunction(() => innerWidth === 1024 && innerHeight === 768);
-  homeChecks.push('minimum 800×600 native home keeps all controls and labels inside the window');
+    BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手').setSize(650, 500));
+  await page.waitForFunction(() => Math.abs(innerWidth * 0.65625 - 650) <= 2 && Math.abs(innerHeight * 0.65625 - 500) <= 2);
+  homeChecks.push('minimum 640×480 native home keeps all controls and labels inside the window');
   const syntheticRejected = await page.evaluate(async () => {
     try { await window.codeAssistant.openDroppedProject(new File(['x'], 'fake.py')); return false; }
     catch { return true; }
@@ -248,11 +256,12 @@ async function inspectHome(page, application) {
   await application.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手').show());
   await page.getByRole('button', { name: '最大化或还原', exact: true }).click();
-  await page.waitForFunction(() => innerWidth > 1024 || innerHeight > 768);
+  await page.waitForFunction(({ width, height }) => innerWidth > width || innerHeight > height,
+    { width: layout.width, height: layout.height });
   await waitForNativeState(application, 'maximized', true);
   await page.getByRole('button', { name: '最大化或还原', exact: true }).click();
   await waitForNativeState(application, 'maximized', false);
-  await page.waitForFunction(() => innerWidth === 1024 && innerHeight === 768);
+  await page.waitForFunction(() => Math.abs(innerWidth * 0.65625 - 650) <= 2 && Math.abs(innerHeight * 0.65625 - 500) <= 2);
   await page.getByRole('button', { name: '最小化', exact: true }).click();
   await waitForNativeState(application, 'minimized', true);
   await application.evaluate(({ BrowserWindow }) =>

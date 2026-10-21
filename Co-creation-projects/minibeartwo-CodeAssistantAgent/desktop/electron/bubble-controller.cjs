@@ -5,6 +5,36 @@ const path = require('node:path');
 
 const SIZE = 96;
 
+function getClientPosition(anchor, client, work) {
+  const gap = 12;
+  const marginX = work.width >= client.width + 16 ? 8 : 0;
+  const marginY = work.height >= client.height + 16 ? 8 : 0;
+  const left = work.x + marginX;
+  const top = work.y + marginY;
+  const right = Math.max(left, work.x + work.width - marginX - client.width);
+  const bottom = Math.max(top, work.y + work.height - marginY - client.height);
+  const centeredX = anchor.x + (anchor.width - client.width) / 2;
+  const centeredY = anchor.y + (anchor.height - client.height) / 2;
+  const candidates = [
+    { x: anchor.x + anchor.width + gap, y: centeredY },
+    { x: anchor.x - client.width - gap, y: centeredY },
+    { x: centeredX, y: anchor.y + anchor.height + gap },
+    { x: centeredX, y: anchor.y - client.height - gap },
+  ].map((candidate) => {
+    const x = Math.max(left, Math.min(Math.round(candidate.x), right));
+    const y = Math.max(top, Math.min(Math.round(candidate.y), bottom));
+    const overlapWidth = Math.max(0,
+      Math.min(x + client.width, anchor.x + anchor.width + gap) - Math.max(x, anchor.x - gap));
+    const overlapHeight = Math.max(0,
+      Math.min(y + client.height, anchor.y + anchor.height + gap) - Math.max(y, anchor.y - gap));
+    return { x, y, overlap: overlapWidth * overlapHeight,
+      shift: Math.hypot(x - candidate.x, y - candidate.y) };
+  });
+  // Prefer a clear side of the character, then the position needing least clamping.
+  candidates.sort((a, b) => a.overlap - b.overlap || a.shift - b.shift);
+  return { x: candidates[0].x, y: candidates[0].y };
+}
+
 function createBubble({ mainWindow, userData, hidden, onQuit }) {
   const positionFile = path.join(userData, 'bubble-position.json');
   let ready = false;
@@ -114,11 +144,22 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     }
   }
 
+  function positionClient() {
+    if (bubble.isDestroyed() || mainWindow.isDestroyed() ||
+      mainWindow.isMaximized() || mainWindow.isFullScreen()) return;
+    const anchor = bubble.getBounds();
+    const work = screen.getDisplayMatching(anchor).workArea;
+    const next = getClientPosition(anchor, mainWindow.getBounds(), work);
+    mainWindow.setPosition(next.x, next.y, false);
+  }
+
   function showClient() {
     if (!ready || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
+    positionClient();
     mainWindow.setSkipTaskbar(false);
     mainWindow.show();
+    positionClient();
     mainWindow.focus();
     notify();
   }
@@ -203,6 +244,7 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     // Windows can change frameless bounds slightly during a monitor DPI transition.
     bubble.setBounds({ ...next, width: SIZE, height: SIZE }, false);
     savePosition();
+    if (mainWindow.isVisible()) positionClient();
   }
   screen.on('display-removed', keepOnScreen);
   screen.on('display-metrics-changed', keepOnScreen);
@@ -237,4 +279,4 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
   };
 }
 
-module.exports = { createBubble };
+module.exports = { createBubble, getClientPosition };

@@ -297,11 +297,12 @@ app.whenReady().then(async () => {
   try {
     await launchBackend();
     window = new BrowserWindow({
-      width: 896,
-      height: 672,
-      minWidth: 800,
-      minHeight: 600,
+      width: 650,
+      height: 500,
+      minWidth: 640,
+      minHeight: 480,
       frame: false,
+      thickFrame: false,
       show: false,
       skipTaskbar: true,
       backgroundColor: '#10151e',
@@ -309,7 +310,7 @@ app.whenReady().then(async () => {
       webPreferences: {
         preload: path.join(__dirname, 'preload.cjs'),
         zoomMode: 'isolated',
-        zoomFactor: 0.875,
+        zoomFactor: 0.65625,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
