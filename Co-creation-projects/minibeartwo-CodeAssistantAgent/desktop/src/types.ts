@@ -3,16 +3,6 @@ export interface Workspace {
   name: string;
   root: string;
 }
-export interface FileEntry {
-  path: string;
-  name: string;
-  directory: boolean;
-}
-export interface FileData {
-  path: string;
-  content: string;
-  hash: string;
-}
 export interface Session {
   id: string;
   title: string;
@@ -38,6 +28,8 @@ export interface Task {
   status: string;
   result: string;
   steps: number;
+  selected_file?: string | null;
+  test_argv?: string[];
   patches?: Patch[];
 }
 export interface ModelSettings {
@@ -64,6 +56,9 @@ export interface TaskEvent {
 export interface Bridge {
   bootstrap(): Promise<{ version: string; settings: ModelSettings; workspaces: Workspace[] }>;
   openWorkspace(): Promise<Workspace | null>;
+  openDroppedProject(file: File): Promise<{ workspace: Workspace; selectedFile: string | null }>;
+  windowState(): Promise<{ maximized: boolean }>;
+  windowControl(action: 'minimize' | 'maximize' | 'close'): Promise<{ maximized: boolean }>;
   request<T>(method: string, path: string, body?: unknown): Promise<T>;
   watchTask(id: string, after?: number): Promise<void>;
   unwatchTask(id: string): Promise<void>;

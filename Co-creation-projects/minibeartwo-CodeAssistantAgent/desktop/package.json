@@ -13,8 +13,6 @@
     "test:bubble": "node scripts/bubble-smoke.mjs"
   },
   "dependencies": {
-    "@monaco-editor/react": "4.7.0",
-    "monaco-editor": "0.57.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

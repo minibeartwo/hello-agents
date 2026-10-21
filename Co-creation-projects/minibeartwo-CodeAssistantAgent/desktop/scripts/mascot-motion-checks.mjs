@@ -8,16 +8,20 @@ export async function assertMascotMotion({
   bubblePage, application, nativeState, bubbleTitle, artifacts, checks, pause, eventually, animation,
 }) {
   const button = bubblePage.locator('#bubble');
-  const hasPose = (pose, motion) => eventually(
-    () => bubblePage.evaluate(({ pose, motion }) => {
+  // Reduced feedback lasts 180 ms, so observe transient states on browser frames.
+  // An 80 ms Node poll plus media emulation round trips can miss a valid gesture.
+  const hasPose = async (pose, motion) => {
+    const state = await bubblePage.waitForFunction(({ pose, motion }) => {
       const target = document.getElementById('bubble');
       const image = document.getElementById('bubble-character');
       return target.dataset.pose === pose && target.dataset.motion === motion &&
         target.dataset.render === 'canvas' && image.complete && image.naturalWidth > 0 &&
         !!window.__mascotMotion?.snapshot;
-    }, { pose, motion }),
-    `Mascot must render ${pose}/${motion} on its decoded canvas`,
-  );
+    }, { pose, motion }, { timeout: 15000, polling: 'raf' }).catch((error) => {
+      throw new Error(`Mascot must render ${pose}/${motion} on its decoded canvas: ${error.message}`);
+    });
+    await state.dispose();
+  };
   const snapshot = () => bubblePage.evaluate(() => window.__mascotMotion.snapshot());
   const leave = async () => {
     await button.evaluate((element) => element.blur());

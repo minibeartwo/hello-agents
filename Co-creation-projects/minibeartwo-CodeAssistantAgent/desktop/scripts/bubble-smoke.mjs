@@ -79,8 +79,10 @@ async function nativeState() {
         mainVisible: main.isVisible(),
         mainMinimized: main.isMinimized(),
         mainOpacity: main.getOpacity(),
+        mainZoom: main.webContents.getZoomFactor(),
         bubbleVisible: bubble.isVisible(),
         bubbleOpacity: bubble.getOpacity(),
+        bubbleZoom: bubble.webContents.getZoomFactor(),
         bubbleBounds: bounds,
         workArea: screen.getDisplayMatching(bounds).workArea,
         alwaysOnTop: bubble.isAlwaysOnTop(),
@@ -337,7 +339,7 @@ async function launch() {
     });
   }
   await mainPage.waitForFunction(() => !!window.codeAssistant);
-  await mainPage.locator('.model-button:not(:disabled)').waitFor();
+  await mainPage.locator('.project-drop:not(:disabled)').waitFor();
   await bubblePage.waitForFunction(() => !!window.assistantBubble);
   await bubblePage.getByRole('button').first().waitFor({ state: 'attached' });
   return eventually(nativeState, 'Native windows must be available');
@@ -471,6 +473,8 @@ try {
   assert.equal(state.bubbleVisible, false, 'QA hidden mode hides the bubble as well');
   assert.equal(state.mainOpacity, 0, 'the QA client never appears on the shared desktop');
   assert.equal(state.bubbleOpacity, 0, 'the QA launcher never appears on the shared desktop');
+  assert.equal(state.mainZoom, 0.875, 'the client keeps its compact scale');
+  assert.equal(state.bubbleZoom, 1, 'the mascot retains its independent native scale');
   assert.equal(state.bubbleBounds.width, 96);
   assert.equal(state.bubbleBounds.height, 96);
   assert.equal(state.resizable, false);
@@ -497,14 +501,18 @@ try {
   await application.evaluate(({ dialog }, folder) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] });
   }, workspace);
-  await mainPage.locator('.header-actions > button').first().click();
-  await mainPage.locator('.header-workspace').filter({ hasText: 'bubble-workspace' }).waitFor();
-  await mainPage.locator('.model-button').click();
+  await mainPage.getByRole('button', { name: '导入项目', exact: true }).click();
+  await mainPage.locator('.selected-project').filter({ hasText: 'bubble-workspace' }).waitFor();
+  await mainPage.locator('.home-action-comment').click();
+  await mainPage.getByRole('dialog', { name: '代码注释', exact: true }).waitFor();
+  assert.equal(await mainPage.locator('.workspace-layout, .editor-area, .sidebar, .assistant-panel, .monaco-editor').count(), 0);
+  await mainPage.locator('.feature-dialog').getByRole('button', { name: '模型设置', exact: true }).click();
   await mainPage.locator('input[name="base_url"]').fill('http://127.0.0.1:12345/v1');
   await mainPage.locator('input[name="model"]').fill('bubble-state-test');
   await mainPage.getByRole('button', { name: '保存连接', exact: true }).click();
-  await mainPage.locator('.settings-dialog').waitFor({ state: 'hidden' });
-  await mainPage.locator('.model-button').filter({ hasText: 'bubble-state-test' }).waitFor();
+  await mainPage.getByRole('dialog', { name: '模型设置', exact: true }).waitFor({ state: 'hidden' });
+  assert.equal(await mainPage.evaluate(async () => (await window.codeAssistant.bootstrap()).settings.model), 'bubble-state-test');
+  assert.match(await mainPage.locator('.feature-dialog').getByRole('button', { name: '模型设置', exact: true }).innerText(), /bubble-state-test/);
   await mainPage
     .getByRole('textbox', { name: '任务需求', exact: true })
     .fill('Keep this unsent draft while the client is tucked away.');
@@ -523,17 +531,15 @@ try {
     await mainPage.getByRole('textbox', { name: '任务需求', exact: true }).inputValue(),
     'Keep this unsent draft while the client is tucked away.',
   );
-  assert.match(await mainPage.locator('.header-workspace').innerText(), /bubble-workspace/);
-  assert.match(await mainPage.locator('.model-button').innerText(), /bubble-state-test/);
+  assert.match(await mainPage.locator('.selected-project').innerText(), /bubble-workspace/);
+  assert.equal(await mainPage.evaluate(async () => (await window.codeAssistant.bootstrap()).settings.model), 'bubble-state-test');
+  assert.match(await mainPage.locator('.feature-dialog').getByRole('button', { name: '模型设置', exact: true }).innerText(), /bubble-state-test/);
+  assert.equal(await mainPage.locator('.workspace-layout, .editor-area, .sidebar, .assistant-panel, .monaco-editor').count(), 0);
   checks.push(
     'bubble clicks toggle the client while preserving project, model settings, and unsent draft',
   );
 
-  await application.evaluate(({ BrowserWindow }, title) => {
-    BrowserWindow.getAllWindows()
-      .find((window) => window.getTitle() === title)
-      .close();
-  }, mainTitle);
+  await mainPage.getByRole('button', { name: '关闭窗口', exact: true }).click();
   state = await nativeState();
   assert.equal(state.mainVisible, false);
   assert.equal(state.bubbleVisible, true);
@@ -670,8 +676,12 @@ try {
   const restartedSidecar = await ownBackend();
   await showBubble();
   await clickBubble();
-  await mainPage.locator('.header-workspace').filter({ hasText: 'bubble-workspace' }).waitFor();
-  assert.match(await mainPage.locator('.model-button').innerText(), /bubble-state-test/);
+  await mainPage.locator('.home-action-comment').click();
+  await mainPage.getByRole('dialog', { name: '代码注释', exact: true }).waitFor();
+  assert.match(await mainPage.locator('.selected-project').innerText(), /bubble-workspace/);
+  assert.equal(await mainPage.evaluate(async () => (await window.codeAssistant.bootstrap()).settings.model), 'bubble-state-test');
+  assert.match(await mainPage.locator('.feature-dialog').getByRole('button', { name: '模型设置', exact: true }).innerText(), /bubble-state-test/);
+  assert.equal(await mainPage.locator('.workspace-layout, .editor-area, .sidebar, .assistant-panel, .monaco-editor').count(), 0);
   await application.close();
   application = null;
   await assertBackendStopped(restartedSidecar);

@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const { randomBytes } = require('node:crypto');
 const { spawn, execFile } = require('node:child_process');
 const { existsSync } = require('node:fs');
+const { stat } = require('node:fs/promises');
 const net = require('node:net');
 const path = require('node:path');
 const { createBubble } = require('./bubble-controller.cjs');
@@ -73,12 +74,11 @@ function allowed(method, route) {
     GET: [
       'settings',
       'workspaces',
-      `workspaces/${id}/(tree|file|search)`,
       'sessions',
       `sessions/${id}/tasks`,
       `tasks/${id}`,
     ],
-    PUT: ['settings', `workspaces/${id}/file`],
+    PUT: ['settings'],
     POST: ['tasks', `tasks/${id}/cancel`, `patches/${id}/(review|undo)`],
   };
   return (routes[method] || []).some((pattern) => new RegExp(`^/api/${pattern}$`).test(pathname));
@@ -218,6 +218,43 @@ function registerHandlers() {
     });
     return choice.canceled ? null : api('POST', '/api/workspaces', { path: choice.filePaths[0] });
   });
+  ipcMain.handle('assistant:open-dropped-workspace', async (event, droppedPath) => {
+    trust(event);
+    if (
+      typeof droppedPath !== 'string' ||
+      droppedPath.length > 32768 ||
+      droppedPath.includes('\0') ||
+      !path.isAbsolute(droppedPath)
+    )
+      throw new Error('请拖入本地项目文件夹或代码文件。');
+    let entry;
+    try {
+      entry = await stat(droppedPath);
+    } catch {
+      throw new Error('无法读取拖入的项目，请确认文件仍然存在且可以访问。');
+    }
+    if (!entry.isDirectory() && !entry.isFile())
+      throw new Error('请拖入项目文件夹或普通代码文件。');
+    const projectPath = entry.isDirectory() ? droppedPath : path.dirname(droppedPath);
+    return {
+      workspace: await api('POST', '/api/workspaces', { path: projectPath }),
+      selectedFile: entry.isFile() ? path.basename(droppedPath) : null,
+    };
+  });
+  ipcMain.handle('assistant:window-state', (event) => {
+    trust(event);
+    return { maximized: window.isMaximized() };
+  });
+  ipcMain.handle('assistant:window-control', (event, action) => {
+    trust(event);
+    if (action === 'minimize') window.minimize();
+    else if (action === 'maximize') {
+      if (window.isMaximized()) window.unmaximize();
+      else window.maximize();
+    } else if (action === 'close') window.close();
+    else throw new Error('未知的窗口操作。');
+    return { maximized: window.isMaximized() };
+  });
   ipcMain.handle('assistant:request', async (event, request) => {
     trust(event);
     if (
@@ -260,21 +297,25 @@ app.whenReady().then(async () => {
   try {
     await launchBackend();
     window = new BrowserWindow({
-      width: 1540,
-      height: 990,
-      minWidth: 1100,
-      minHeight: 720,
+      width: 896,
+      height: 672,
+      minWidth: 800,
+      minHeight: 600,
+      frame: false,
       show: false,
       skipTaskbar: true,
       backgroundColor: '#10151e',
       title: 'CodeAssistantAgent · 代码助手',
       webPreferences: {
         preload: path.join(__dirname, 'preload.cjs'),
+        zoomMode: 'isolated',
+        zoomFactor: 0.875,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
       },
     });
+    window.setMenu(null);
     registerHandlers();
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', (event) => event.preventDefault());

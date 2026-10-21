@@ -1,8 +1,15 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('codeAssistant', {
   bootstrap: () => ipcRenderer.invoke('assistant:bootstrap'),
   openWorkspace: () => ipcRenderer.invoke('assistant:open-workspace'),
+  openDroppedProject: async (file) => {
+    const droppedPath = webUtils.getPathForFile(file);
+    if (!droppedPath) throw new Error('请从文件管理器拖入本地项目。');
+    return ipcRenderer.invoke('assistant:open-dropped-workspace', droppedPath);
+  },
+  windowState: () => ipcRenderer.invoke('assistant:window-state'),
+  windowControl: (action) => ipcRenderer.invoke('assistant:window-control', action),
   request: (method, path, body) => ipcRenderer.invoke('assistant:request', { method, path, body }),
   watchTask: (taskId, after = 0) => ipcRenderer.invoke('assistant:watch', { taskId, after }),
   unwatchTask: (taskId) => ipcRenderer.invoke('assistant:unwatch', taskId),
