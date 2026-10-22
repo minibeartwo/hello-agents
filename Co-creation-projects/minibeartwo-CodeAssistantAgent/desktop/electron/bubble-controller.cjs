@@ -1,7 +1,8 @@
 /** Native floating launcher: the renderer can only drag, toggle, or open its menu. */
-const { BrowserWindow, Menu, ipcMain, screen } = require('electron');
+const { BrowserWindow, Menu, ipcMain, screen, systemPreferences } = require('electron');
 const { readFileSync, writeFileSync, mkdirSync } = require('node:fs');
 const path = require('node:path');
+const { createClientTransition } = require('./client-transition.cjs');
 
 const SIZE = 96;
 
@@ -40,6 +41,12 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
   let ready = false;
   let drag = null;
   let disposed = false;
+  const clientTransition = createClientTransition({
+    window: mainWindow,
+    getPositions: clientPositions,
+    reduceMotion: () => systemPreferences.getAnimationSettings().prefersReducedMotion,
+    onState: notify,
+  });
   const area = screen.getPrimaryDisplay().workArea;
   let initial = { x: area.x + area.width - SIZE - 24, y: area.y + area.height * 0.55 - SIZE / 2 };
   try {
@@ -139,7 +146,7 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
       bubble.webContents.send('bubble:state', {
         ready,
         clientVisible:
-          !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized(),
+          !mainWindow.isDestroyed() && clientTransition.isOpen(),
       });
     }
   }
@@ -153,26 +160,38 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     mainWindow.setPosition(next.x, next.y, false);
   }
 
+  function clientPositions() {
+    if (bubble.isDestroyed() || mainWindow.isMaximized() || mainWindow.isFullScreen()) return null;
+    const anchor = bubble.getBounds();
+    const bounds = mainWindow.getBounds();
+    const work = screen.getDisplayMatching(anchor).workArea;
+    const end = getClientPosition(anchor, bounds, work);
+    const dx = end.x + bounds.width / 2 - anchor.x - anchor.width / 2;
+    const dy = end.y + bounds.height / 2 - anchor.y - anchor.height / 2;
+    const distance = Math.hypot(dx, dy) || 1;
+    const marginX = work.width >= bounds.width + 16 ? 8 : 0;
+    const marginY = work.height >= bounds.height + 16 ? 8 : 0;
+    const start = {
+      x: Math.max(work.x + marginX, Math.min(Math.round(end.x - 12 * dx / distance),
+        Math.max(work.x + marginX, work.x + work.width - marginX - bounds.width))),
+      y: Math.max(work.y + marginY, Math.min(Math.round(end.y - 12 * dy / distance),
+        Math.max(work.y + marginY, work.y + work.height - marginY - bounds.height))),
+    };
+    return { start, end };
+  }
+
   function showClient() {
     if (!ready || mainWindow.isDestroyed()) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    positionClient();
-    mainWindow.setSkipTaskbar(false);
-    mainWindow.show();
-    positionClient();
-    mainWindow.focus();
-    notify();
+    clientTransition.show();
   }
 
   function hideClient() {
     if (mainWindow.isDestroyed()) return;
-    mainWindow.hide();
-    mainWindow.setSkipTaskbar(true);
-    notify();
+    clientTransition.hide();
   }
 
   function toggle() {
-    if (mainWindow.isVisible() && !mainWindow.isMinimized()) hideClient();
+    if (clientTransition.isOpen()) hideClient();
     else showClient();
   }
 
@@ -181,7 +200,7 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     drag = null;
     Menu.buildFromTemplate([
       {
-        label: mainWindow.isVisible() && !mainWindow.isMinimized() ? '收起客户端' : '打开客户端',
+        label: clientTransition.isOpen() ? '收起客户端' : '打开客户端',
         enabled: ready,
         click: toggle,
       },
@@ -240,6 +259,7 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
 
   function keepOnScreen() {
     if (bubble.isDestroyed()) return;
+    clientTransition.settle();
     const next = boundedPosition(bubble.getBounds());
     // Windows can change frameless bounds slightly during a monitor DPI transition.
     bubble.setBounds({ ...next, width: SIZE, height: SIZE }, false);
@@ -269,6 +289,7 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     dispose() {
       if (disposed) return;
       disposed = true;
+      clientTransition.dispose();
       savePosition();
       for (const name of Object.keys(handlers)) ipcMain.removeHandler(name);
       for (const [name, listener] of Object.entries(listeners))

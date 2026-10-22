@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { PNG } from 'pngjs';
 import { runInNewContext } from 'node:vm';
 import { assertMascotMotion } from './mascot-motion-checks.mjs';
+import { assertClientTransitions } from './client-transition-checks.mjs';
 
 const runFile = promisify(execFile);
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -288,9 +289,23 @@ async function inspectMascotAssets() {
 }
 
 async function assertMascotInteractions(animation) {
-  await assertMascotMotion({
-    bubblePage, application, nativeState, bubbleTitle, artifacts, checks, pause, eventually, animation,
+  // CDP pointer input does not drive the physical system cursor. Hold it steady
+  // during pose checks; native dragging is exercised separately below.
+  await application.evaluate(({ screen }) => {
+    global.__mascotSmokePhysicalCursor = screen.getCursorScreenPoint;
+    const cursor = screen.getCursorScreenPoint();
+    screen.getCursorScreenPoint = () => cursor;
   });
+  try {
+    await assertMascotMotion({
+      bubblePage, application, nativeState, bubbleTitle, artifacts, checks, pause, eventually, animation,
+    });
+  } finally {
+    await application.evaluate(({ screen }) => {
+      screen.getCursorScreenPoint = global.__mascotSmokePhysicalCursor;
+      delete global.__mascotSmokePhysicalCursor;
+    });
+  }
 }
 
 async function launch() {
@@ -517,7 +532,57 @@ async function inspectClientPlacement() {
   checks.push('client placement covers all edges, negative monitor coordinates, and vertical fallback');
 }
 
+async function assertNativeClientTransition() {
+  await application.evaluate(({ BrowserWindow, systemPreferences }, title) => {
+    const window = BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === title);
+    const settings = systemPreferences.getAnimationSettings.bind(systemPreferences);
+    global.__clientTransitionAnimationSettings = settings;
+    systemPreferences.getAnimationSettings = () => ({ ...settings(), prefersReducedMotion: false });
+    global.__clientTransitionFrames = [];
+    for (const name of ['setOpacity', 'setPosition', 'show', 'hide']) {
+      const original = window[name].bind(window);
+      window[name] = (...args) => {
+        const value = original(...args);
+        global.__clientTransitionFrames.push({
+          at: performance.now(), method: name, bounds: window.getBounds(), opacity: window.getOpacity(),
+        });
+        return value;
+      };
+    }
+  }, mainTitle);
+  await bubblePage.evaluate(() => window.assistantBubble.toggle());
+  await bubblePage.waitForFunction(() => document.getElementById('bubble').getAttribute('aria-expanded') === 'true');
+  await pause(280);
+  const opened = await nativeState();
+  assert.equal(opened.mainVisible, true);
+  assert.equal(opened.mainOpacity, 0, 'animation respects the invisible native QA window');
+  assertClientBesideBubble(opened);
+  const frames = await application.evaluate(() => global.__clientTransitionFrames);
+  const moved = frames.filter((frame) => frame.method === 'setPosition');
+  assert.ok(new Set(moved.map((frame) => `${frame.bounds.x},${frame.bounds.y}`)).size >= 3,
+    'the actual native window passes through multiple slide positions');
+  assert.ok(moved.at(-1).at - moved[0].at >= 150, 'the native entrance has visible duration');
+  assert.ok(frames.every((frame) => frame.bounds.width === 650 && frame.bounds.height === 500),
+    'native animation never resizes or reflows the client');
+  await bubblePage.evaluate(() => window.assistantBubble.toggle());
+  await bubblePage.waitForFunction(() => document.getElementById('bubble').getAttribute('aria-expanded') === 'false');
+  await eventually(async () => !(await nativeState()).mainVisible, 'fade-out eventually hides the native window');
+  await bubblePage.evaluate(() => window.assistantBubble.toggle());
+  await pause(48);
+  await bubblePage.evaluate(() => window.assistantBubble.toggle());
+  await pause(16);
+  await bubblePage.evaluate(() => window.assistantBubble.toggle());
+  await pause(300);
+  assert.equal((await nativeState()).mainVisible, true, 'rapid native reopen cannot be hidden by an old timer');
+  assertClientBesideBubble(await nativeState());
+  await bubblePage.evaluate(() => window.assistantBubble.toggle());
+  await eventually(async () => !(await nativeState()).mainVisible, 'transition checks leave the client hidden');
+  await writeFile(path.join(artifacts, 'client-transition-frames.json'), JSON.stringify(frames, null, 2));
+  checks.push('real native client transitions include intermediate positions, retain size and opacity limits, and reverse on rapid clicks');
+}
+
 try {
+  await assertClientTransitions(desktop, checks);
   await inspectClientPlacement();
   const animation = await inspectMascotAssets();
   let state = await launch();
@@ -545,6 +610,7 @@ try {
   await showBubble();
   await eventually(async () => (await nativeState()).alwaysOnTop,
     'The visible native launcher must remain always on top');
+  await assertNativeClientTransition();
   await assertMascotInteractions(animation);
   await clickBubble();
   await eventually(
@@ -585,7 +651,8 @@ try {
     'Bubble must reopen the same client',
   );
   assert.equal((await nativeState()).mainId, initialMainId);
-  assertClientBesideBubble(await nativeState());
+  await eventually(async () => { assertClientBesideBubble(await nativeState()); return true; },
+    'Reopening settles beside the mascot after its transition');
   assert.equal(
     await mainPage.getByRole('textbox', { name: '任务需求', exact: true }).inputValue(),
     'Keep this unsent draft while the client is tucked away.',
@@ -599,7 +666,10 @@ try {
   );
 
   await mainPage.getByRole('button', { name: '关闭窗口', exact: true }).click();
-  state = await nativeState();
+  state = await eventually(async () => {
+    const current = await nativeState();
+    return current.mainVisible ? false : current;
+  }, 'The close button finishes the native fade-out');
   assert.equal(state.mainVisible, false);
   assert.equal(state.bubbleVisible, true);
   assert.equal(state.mainId, initialMainId, 'close hides rather than destroys the renderer');

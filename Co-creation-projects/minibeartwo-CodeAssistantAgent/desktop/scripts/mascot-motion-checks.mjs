@@ -303,7 +303,7 @@ export async function assertMascotMotion({
   await bubblePage.keyboard.press('Enter');
   await hasPose('click', 'animated');
   const firstPlay = (await snapshot()).play;
-  assert.equal((await nativeState()).mainVisible, false, 'Enter toggles the client during feedback');
+  await eventually(async () => !(await nativeState()).mainVisible, 'Enter fades the client out during feedback');
   await pause(140);
   await bubblePage.keyboard.press('Space');
   await hasPose('click', 'animated');
@@ -320,7 +320,7 @@ export async function assertMascotMotion({
   await startTrace();
   await button.evaluate((element) => element.click());
   await hasPose('click', 'animated');
-  assert.equal((await nativeState()).mainVisible, false, 'assistive activation toggles immediately');
+  await eventually(async () => !(await nativeState()).mainVisible, 'assistive activation fades the client out');
   await pause(190);
   await screenshot('phoebe-click');
   await leave();
@@ -342,7 +342,7 @@ export async function assertMascotMotion({
   await hasPose('click', 'animated');
   await eventually(async () => (await snapshot()).play > pointerPlay,
     'second pointer tap accepts a new gesture after native drag validation');
-  assert.equal((await nativeState()).mainVisible, false, 'second rapid pointer tap hides the client');
+  await eventually(async () => !(await nativeState()).mainVisible, 'second rapid pointer tap finishes hiding the client');
   await leave();
   await hasPose('idle', 'static');
   await assertFeedbackDuration();
