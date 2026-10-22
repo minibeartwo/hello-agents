@@ -15,24 +15,24 @@ function getClientPosition(anchor, client, work) {
   const right = Math.max(left, work.x + work.width - marginX - client.width);
   const bottom = Math.max(top, work.y + work.height - marginY - client.height);
   const centeredX = anchor.x + (anchor.width - client.width) / 2;
-  const centeredY = anchor.y + (anchor.height - client.height) / 2;
+  const alignedBottomY = anchor.y + anchor.height - client.height;
   const candidates = [
-    { x: anchor.x + anchor.width + gap, y: centeredY },
-    { x: anchor.x - client.width - gap, y: centeredY },
+    { x: anchor.x - client.width - gap, y: alignedBottomY },
+    { x: anchor.x + anchor.width + gap, y: alignedBottomY },
     { x: centeredX, y: anchor.y + anchor.height + gap },
     { x: centeredX, y: anchor.y - client.height - gap },
-  ].map((candidate) => {
+  ].map((candidate, preference) => {
     const x = Math.max(left, Math.min(Math.round(candidate.x), right));
     const y = Math.max(top, Math.min(Math.round(candidate.y), bottom));
     const overlapWidth = Math.max(0,
       Math.min(x + client.width, anchor.x + anchor.width + gap) - Math.max(x, anchor.x - gap));
     const overlapHeight = Math.max(0,
       Math.min(y + client.height, anchor.y + anchor.height + gap) - Math.max(y, anchor.y - gap));
-    return { x, y, overlap: overlapWidth * overlapHeight,
-      shift: Math.hypot(x - candidate.x, y - candidate.y) };
+    return { x, y, overlap: overlapWidth * overlapHeight, preference };
   });
-  // Prefer a clear side of the character, then the position needing least clamping.
-  candidates.sort((a, b) => a.overlap - b.overlap || a.shift - b.shift);
+  // Open above and to the left, leaving the character at the client's bottom right.
+  // Use another clear side only when the display cannot fit that arrangement.
+  candidates.sort((a, b) => a.overlap - b.overlap || a.preference - b.preference);
   return { x: candidates[0].x, y: candidates[0].y };
 }
 
@@ -158,6 +158,16 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     const work = screen.getDisplayMatching(anchor).workArea;
     const next = getClientPosition(anchor, mainWindow.getBounds(), work);
     mainWindow.setPosition(next.x, next.y, false);
+    const client = mainWindow.getBounds();
+    const beside = next.x + client.width <= anchor.x || next.x >= anchor.x + anchor.width;
+    if (beside) {
+      // If the client was clamped at the top edge, keep the mascot bottom-aligned.
+      const aligned = boundedPosition({ x: anchor.x, y: next.y + client.height - SIZE });
+      if (aligned.y !== anchor.y) {
+        bubble.setBounds({ ...aligned, width: SIZE, height: SIZE }, false);
+        savePosition();
+      }
+    }
   }
 
   function showClient() {
@@ -195,6 +205,26 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     }
   }
 
+  function followClient(anchor) {
+    if (!drag?.clientOrigin || mainWindow.isDestroyed() || !clientTransition.isOpen() ||
+      !mainWindow.isVisible() || mainWindow.isMinimized() ||
+      mainWindow.isMaximized() || mainWindow.isFullScreen()) return;
+    const client = mainWindow.getBounds();
+    const work = screen.getDisplayMatching(anchor).workArea;
+    const marginX = work.width >= client.width + 16 ? 8 : 0;
+    const marginY = work.height >= client.height + 16 ? 8 : 0;
+    let x = Math.max(work.x + marginX, Math.min(drag.clientOrigin.x + anchor.x - drag.origin.x,
+      Math.max(work.x + marginX, work.x + work.width - client.width - marginX)));
+    let y = Math.max(work.y + marginY, Math.min(drag.clientOrigin.y + anchor.y - drag.origin.y,
+      Math.max(work.y + marginY, work.y + work.height - client.height - marginY)));
+    // Keep the original offset while there is room; dock to another side at an edge.
+    if (x < anchor.x + anchor.width + 12 && x + client.width > anchor.x - 12 &&
+      y < anchor.y + anchor.height + 12 && y + client.height > anchor.y - 12) {
+      ({ x, y } = getClientPosition(anchor, client, work));
+    }
+    if (x !== client.x || y !== client.y) mainWindow.setPosition(x, y, false);
+  }
+
   function moveDrag() {
     if (!drag) return;
     const cursor = screen.getCursorScreenPoint();
@@ -204,6 +234,7 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     drag.moved = true;
     const next = boundedPosition({ x: drag.origin.x + dx, y: drag.origin.y + dy });
     bubble.setBounds({ ...next, width: SIZE, height: SIZE }, false);
+    followClient({ ...next, width: SIZE, height: SIZE });
   }
 
   const handlers = {
@@ -213,7 +244,10 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     },
     'bubble:drag-start': (event) => {
       trust(event);
-      drag = { cursor: screen.getCursorScreenPoint(), origin: bubble.getBounds(), moved: false };
+      const follows = !mainWindow.isDestroyed() && clientTransition.isOpen() && mainWindow.isVisible() &&
+        !mainWindow.isMinimized() && !mainWindow.isMaximized() && !mainWindow.isFullScreen();
+      drag = { cursor: screen.getCursorScreenPoint(), origin: bubble.getBounds(), moved: false,
+        clientOrigin: follows ? mainWindow.getBounds() : null };
     },
     'bubble:drag-end': (event) => {
       trust(event);

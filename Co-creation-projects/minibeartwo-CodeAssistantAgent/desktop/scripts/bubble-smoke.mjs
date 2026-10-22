@@ -396,7 +396,21 @@ async function clickBubble() {
   bubbleTitle), 'The native bubble must be active before a synthetic pointer tap');
   await bubblePage.evaluate(() => new Promise((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  await bubblePage.getByRole('button').first().click();
+  // A synthetic tap does not move the OS cursor. Freeze it for this tap so a user's
+  // concurrent physical mouse movement cannot turn the test click into a native drag.
+  await application.evaluate(({ screen }) => {
+    global.__tapRealCursor = screen.getCursorScreenPoint;
+    const point = screen.getCursorScreenPoint();
+    screen.getCursorScreenPoint = () => ({ ...point });
+  });
+  try {
+    await bubblePage.getByRole('button').first().click();
+  } finally {
+    await application.evaluate(({ screen }) => {
+      screen.getCursorScreenPoint = global.__tapRealCursor;
+      delete global.__tapRealCursor;
+    });
+  }
 }
 
 async function ownBackend() {
@@ -506,10 +520,13 @@ async function inspectClientPlacement() {
   const client = { width: 650, height: 500 };
   const work = { x: 0, y: 0, width: 1536, height: 824 };
   const cases = [
+    { name: 'preferred bottom-right mascot', work,
+      anchor: { x: 800, y: 600, width: 96, height: 96 }, side: 'left', bottomAligned: true },
     { name: 'right edge', work, anchor: { x: 1416, y: 350, width: 96, height: 96 }, side: 'left' },
     { name: 'left edge', work, anchor: { x: 24, y: 350, width: 96, height: 96 }, side: 'right' },
     { name: 'top edge', work, anchor: { x: 1416, y: 8, width: 96, height: 96 } },
-    { name: 'bottom edge', work, anchor: { x: 1416, y: 720, width: 96, height: 96 } },
+    { name: 'bottom edge', work, anchor: { x: 1416, y: 720, width: 96, height: 96 },
+      side: 'left', bottomAligned: true },
     { name: 'negative monitor coordinates', work: { x: -1280, y: 100, width: 1280, height: 800 },
       anchor: { x: -1256, y: 300, width: 96, height: 96 }, side: 'right' },
     { name: 'monitor above primary', work: { x: 0, y: -900, width: 1600, height: 900 },
@@ -528,11 +545,19 @@ async function inspectClientPlacement() {
     if (fixture.side === 'left') assert.ok(bounds.x + bounds.width < fixture.anchor.x);
     if (fixture.side === 'right') assert.ok(bounds.x > fixture.anchor.x + fixture.anchor.width);
     if (fixture.side === 'below') assert.ok(bounds.y > fixture.anchor.y + fixture.anchor.height);
+    if (fixture.bottomAligned) assert.equal(bounds.y + bounds.height,
+      fixture.anchor.y + fixture.anchor.height, `${fixture.name}: align the two bottom edges`);
   }
   checks.push('client placement covers all edges, negative monitor coordinates, and vertical fallback');
 }
 
 async function assertNativeClientTransition() {
+  // Insufficient space above must still leave Phoebe beside the client's bottom edge.
+  await application.evaluate(({ BrowserWindow, screen }, title) => {
+    const bubble = BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === title);
+    const work = screen.getDisplayMatching(bubble.getBounds()).workArea;
+    bubble.setPosition(work.x + work.width - 120, work.y + 8, false);
+  }, bubbleTitle);
   await application.evaluate(({ BrowserWindow, systemPreferences }, title) => {
     const window = BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === title);
     const settings = systemPreferences.getAnimationSettings.bind(systemPreferences);
@@ -557,6 +582,12 @@ async function assertNativeClientTransition() {
   assert.equal(opened.mainVisible, true);
   assert.equal(opened.mainOpacity, 0, 'animation respects the invisible native QA window');
   assertClientBesideBubble(opened);
+  assert.ok(opened.mainBounds.x + opened.mainBounds.width < opened.bubbleBounds.x,
+    'the mascot defaults to the right of the client');
+  assert.equal(opened.mainBounds.y + opened.mainBounds.height,
+    opened.bubbleBounds.y + opened.bubbleBounds.height,
+    'opening near the top edge adjusts the mascot to the client bottom');
+  checks.push('click opens the client above-left with Phoebe bottom-aligned, even near the screen top');
   const frames = await application.evaluate(() => global.__clientTransitionFrames);
   await writeFile(path.join(artifacts, 'client-transition-frames.json'), JSON.stringify(frames, null, 2));
   const moved = frames.filter((frame) => frame.method === 'setPosition');
@@ -589,6 +620,87 @@ async function assertNativeClientTransition() {
   await eventually(async () => !(await nativeState()).mainVisible, 'transition checks leave the client hidden');
   await writeFile(path.join(artifacts, 'client-transition-frames.json'), JSON.stringify(frames, null, 2));
   checks.push('real native client fades gradually in place, retains size and opacity limits, and reverses on rapid clicks');
+}
+
+async function assertClientDragFollowing() {
+  await bubblePage.evaluate(() => window.assistantBubble.toggle());
+  await pause(600);
+  const before = await nativeState();
+  assert.equal(before.mainVisible, true);
+  const { mainBounds: client, bubbleBounds: anchor, workArea: work } = before;
+  const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
+  const dx = clamp(-40, work.x + 8 - Math.min(client.x, anchor.x),
+    work.x + work.width - 8 - Math.max(client.x + client.width, anchor.x + anchor.width));
+  const dy = clamp(-32, work.y + 8 - Math.min(client.y, anchor.y),
+    work.y + work.height - 8 - Math.max(client.y + client.height, anchor.y + anchor.height));
+  await writeFile(path.join(artifacts, 'client-drag-start.json'), JSON.stringify({ before, dx, dy }, null, 2));
+  assert.ok(Math.hypot(dx, dy) >= 6, 'the two-window group has room for a real drag');
+  const opacityFrames = await application.evaluate(() =>
+    global.__clientTransitionFrames.filter((frame) => frame.method === 'setOpacity').length);
+  await application.evaluate(({ screen, BrowserWindow }, title) => {
+    global.__followDragRealCursor = screen.getCursorScreenPoint;
+    global.__followDragCursor = { x: 400, y: 400 };
+    screen.getCursorScreenPoint = () => ({ ...global.__followDragCursor });
+    BrowserWindow.getAllWindows().find((window) => window.getTitle() === title).focus();
+  }, bubbleTitle);
+  try {
+    await eventually(() => application.evaluate(({ BrowserWindow }, title) =>
+      BrowserWindow.getAllWindows().find((window) => window.getTitle() === title).isFocused(),
+    bubbleTitle), 'The bubble receives focus before dragging the visible client');
+    const button = bubblePage.locator('#bubble');
+    const center = await button.boundingBox();
+    const play = await button.getAttribute('data-play');
+    await bubblePage.mouse.move(center.x + center.width / 2, center.y + center.height / 2);
+    await bubblePage.mouse.down();
+    await bubblePage.evaluate(() => window.assistantBubble.startDrag());
+    await application.evaluate((_electron, { dx, dy }) => {
+      global.__followDragCursor = { x: 400 + dx, y: 400 + dy };
+    }, { dx, dy });
+    await bubblePage.mouse.move(center.x + center.width / 2 + Math.sign(dx) * 12,
+      center.y + center.height / 2 + Math.sign(dy) * 12, { steps: 3 });
+    const moved = await eventually(async () => {
+      const current = await nativeState();
+      if (current.bubbleBounds.x === anchor.x && current.bubbleBounds.y === anchor.y) return false;
+      assert.equal(current.mainBounds.x - client.x, current.bubbleBounds.x - anchor.x);
+      assert.equal(current.mainBounds.y - client.y, current.bubbleBounds.y - anchor.y);
+      return current;
+    }, 'The visible client follows while the pointer is still held, with the same movement delta');
+    assert.equal(moved.mainVisible, true);
+    assert.equal(moved.mainId, before.mainId);
+    assert.equal(moved.mainBounds.width, client.width);
+    assert.equal(moved.mainBounds.height, client.height);
+    assertClientBesideBubble(moved);
+    await bubblePage.mouse.up();
+    await eventually(() => button.getAttribute('data-pose').then((pose) => pose !== 'pressed'),
+      'Releasing a linked drag releases pointer capture');
+    assert.equal(await button.getAttribute('data-play'), play, 'linked dragging does not toggle or restart click feedback');
+    assert.equal(await application.evaluate(() =>
+      global.__clientTransitionFrames.filter((frame) => frame.method === 'setOpacity').length), opacityFrames,
+    'linked dragging does not restart the fade animation');
+    assert.equal(await mainPage.getByRole('textbox', { name: '任务需求', exact: true }).inputValue(),
+      'Keep this unsent draft while the client is tucked away.');
+    checks.push('dragging the visible client and mascot preserves their offset, dimensions, renderer, draft, and opacity');
+
+    await bubblePage.evaluate(() => window.assistantBubble.startDrag());
+    await application.evaluate(() => { global.__followDragCursor = { x: -1000000, y: -1000000 }; });
+    await bubblePage.evaluate(() => window.assistantBubble.moveDrag());
+    assert.equal((await bubblePage.evaluate(() => window.assistantBubble.endDrag())).dragged, true);
+    await eventually(async () => {
+      const current = await nativeState();
+      assertWithinWorkArea(current);
+      assertClientBesideBubble(current);
+      return true;
+    }, 'A linked drag near a display edge keeps both windows visible without covering the mascot');
+    assert.equal((await nativeState()).mainVisible, true);
+    checks.push('linked dragging at display edges repositions the client inside the mascot display work area');
+  } finally {
+    await application.evaluate(({ screen }) => {
+      screen.getCursorScreenPoint = global.__followDragRealCursor;
+      delete global.__followDragRealCursor;
+    });
+  }
+  await bubblePage.evaluate(() => window.assistantBubble.toggle());
+  await eventually(async () => !(await nativeState()).mainVisible, 'Linked-drag checks finish with the client hidden');
 }
 
 try {
@@ -726,7 +838,8 @@ try {
       ),
     'The native bubble must be active before synthetic dragging',
   );
-  const beforeDrag = (await nativeState()).bubbleBounds;
+  const beforeHiddenDrag = await nativeState();
+  const beforeDrag = beforeHiddenDrag.bubbleBounds;
   const beforeDragPlay = await bubblePage.locator('#bubble').getAttribute('data-play');
   const center = await bubblePage.getByRole('button').first().boundingBox();
   assert.ok(center);
@@ -757,6 +870,8 @@ try {
   }, 'Pointer release must sample the final native cursor position');
   state = await nativeState();
   assert.equal(state.mainVisible, false, 'releasing a drag must not also toggle the client');
+  assert.deepEqual(state.mainBounds, beforeHiddenDrag.mainBounds,
+    'dragging the mascot alone does not move the hidden client');
   await eventually(() => bubblePage.locator('#bubble').getAttribute('data-pose').then((pose) => pose !== 'pressed'),
     'Releasing a drag restores the character pose');
   assert.equal(await bubblePage.locator('#bubble').getAttribute('data-play'), beforeDragPlay,
@@ -774,6 +889,7 @@ try {
   checks.push(
     'renderer drag moves the native window, persists coordinates, and suppresses accidental toggle',
   );
+  await assertClientDragFollowing();
 
   await application.evaluate(({ BrowserWindow }, title) => {
     BrowserWindow.getAllWindows()
@@ -832,6 +948,8 @@ try {
   );
   console.log(`Bubble smoke passed. Artifacts: ${artifacts}`);
 } catch (error) {
+  const failedNativeState = await nativeState().catch(() => null);
+  await writeFile(path.join(artifacts, 'native-failure-state.json'), JSON.stringify(failedNativeState, null, 2)).catch(() => {});
   await writeFile(path.join(artifacts, 'electron-stderr.log'), nativeStderr).catch(() => {});
   if (bubblePage && !bubblePage.isClosed()) {
     await writeFile(path.join(artifacts, 'mascot-failure-state.json'), JSON.stringify(
