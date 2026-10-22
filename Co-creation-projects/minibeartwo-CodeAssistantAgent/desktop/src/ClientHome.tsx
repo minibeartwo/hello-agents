@@ -103,6 +103,104 @@ function DocumentIcon({ code = false }: { code?: boolean }) {
   );
 }
 
+function ReadyProjectArt() {
+  return (
+    <span className="project-ready-art" aria-hidden="true">
+      <span className="project-ripple" />
+      <span className="project-ripple project-ripple-outer" />
+      <Butterfly className="project-butterfly project-butterfly-left" />
+      <Butterfly className="project-butterfly project-butterfly-right" />
+      <i className="magic-star project-spark project-spark-left" />
+      <i className="magic-star project-spark project-spark-right" />
+      <svg className="ready-folder" viewBox="0 0 200 160" fill="none">
+        <defs>
+          <linearGradient
+            id="ready-folder-fill"
+            x1="36"
+            y1="62"
+            x2="163"
+            y2="153"
+            gradientUnits="userSpaceOnUse"
+          >
+            <stop stopColor="#7eeaff" />
+            <stop offset=".45" stopColor="#2798f5" />
+            <stop offset="1" stopColor="#1c4bc2" />
+          </linearGradient>
+          <linearGradient
+            id="ready-paper-fill"
+            x1="102"
+            y1="10"
+            x2="145"
+            y2="104"
+            gradientUnits="userSpaceOnUse"
+          >
+            <stop stopColor="#fff" />
+            <stop offset="1" stopColor="#9bd7ff" />
+          </linearGradient>
+        </defs>
+        <path
+          d="M24 57c0-7 5-12 12-12h39l14 12h69c8 0 13 6 12 13l-9 65H34L24 57Z"
+          fill="#1557bd"
+          stroke="#85dcff"
+          strokeWidth="2"
+        />
+        <g className="ready-folder-papers">
+          <path
+            d="m99 10 66 10c5 1 8 5 7 10l-12 83-80-12 12-83c1-5 3-9 7-8Z"
+            fill="url(#ready-paper-fill)"
+            stroke="#e9fcff"
+            strokeWidth="2"
+          />
+          <path
+            d="m110 32 43 7m-47 10 43 7m-46 10 36 6"
+            stroke="#71a9e8"
+            strokeWidth="4"
+            strokeLinecap="round"
+          />
+          <path
+            d="m66 24 57 12c5 1 7 5 6 10l-15 72-73-15 16-72c1-5 4-8 9-7Z"
+            fill="#133a80"
+            stroke="#96ddff"
+            strokeWidth="2"
+          />
+          <path
+            d="m77 52-12 9 8 13m24-18 8 13-12 9m-5-26-8 28"
+            stroke="#96edff"
+            strokeWidth="3.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </g>
+        <path
+          d="M26 66c-1-7 4-12 11-11l35 6 10 16 78 15c7 1 11 7 9 14l-9 35c-1 6-6 9-12 8L45 130c-5-1-9-5-10-11L26 66Z"
+          fill="url(#ready-folder-fill)"
+          stroke="#bbf8ff"
+          strokeWidth="2.5"
+        />
+        <path
+          d="m42 69 26 5 10 15 71 13"
+          stroke="#c7ffff"
+          strokeOpacity=".6"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+      <span className="project-success-badge">
+        <svg viewBox="0 0 32 32">
+          <path
+            d="m8 16 6 6L25 10"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+    </span>
+  );
+}
+
 export function ClientTitlebar({
   canResume,
   onResume,
@@ -207,6 +305,10 @@ export function ClientHome({
   workspace,
   booting,
   importing,
+  importRevision,
+  selectedFile,
+  clearDisabled,
+  onClear,
   onChoose,
   onDrop,
   onAction,
@@ -214,11 +316,27 @@ export function ClientHome({
   workspace: Workspace | null;
   booting: boolean;
   importing: boolean;
+  importRevision: number;
+  selectedFile: string | null;
+  clearDisabled: boolean;
+  onClear: () => void;
   onChoose: () => void;
   onDrop: (file: File) => void;
   onAction: (action: HomeAction) => void;
 }) {
   const [dragging, setDragging] = useState(false);
+  const [celebrating, setCelebrating] = useState(false);
+  const ready = !!workspace && !booting && !importing;
+  useEffect(() => {
+    setCelebrating(false);
+    if (!importRevision) return;
+    setCelebrating(true);
+    const timeout = window.setTimeout(() => setCelebrating(false), 2200);
+    return () => window.clearTimeout(timeout);
+  }, [importRevision]);
+  useEffect(() => {
+    if (importing) setCelebrating(false);
+  }, [importing]);
   function drop(event: DragEvent) {
     event.preventDefault();
     setDragging(false);
@@ -228,46 +346,86 @@ export function ClientHome({
   }
   return (
     <main className="home-content" aria-label="代码助手首页">
-      <div className="home-grid">
-        <button
-          className={`project-drop ${dragging ? 'is-dragging' : ''}`}
-          aria-label="导入项目"
-          disabled={booting || importing}
-          onClick={onChoose}
-          onDragOver={(event) => {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = 'copy';
-            setDragging(true);
-          }}
-          onDragLeave={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-              setDragging(false);
-          }}
-          onDrop={drop}
-        >
-          <span className="drop-interior">
-            <span className="folder-illustration">
-              <i className="magic-star" />
-              <FolderIcon />
-              <i className="magic-star" />
+      <div
+        className={`home-grid ${ready ? 'has-project' : ''} ${celebrating && ready ? 'is-celebrating' : ''}`}
+      >
+        <div className="project-drop-panel">
+          <button
+            className={`project-drop ${dragging ? 'is-dragging' : ''} ${ready ? 'is-ready' : ''} ${importing ? 'is-importing' : ''}`}
+            aria-label="导入项目"
+            aria-busy={booting || importing}
+            title={
+              workspace ? `${workspace.root}\n点击更换项目，或拖入新的文件夹或代码文件` : undefined
+            }
+            disabled={booting || importing}
+            onClick={onChoose}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'copy';
+              if (!booting && !importing) setDragging(true);
+            }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+                setDragging(false);
+            }}
+            onDrop={drop}
+          >
+            <span className="drop-interior" key={importRevision}>
+              {ready ? (
+                <ReadyProjectArt />
+              ) : (
+                <span className="folder-illustration" aria-hidden="true">
+                  <i className="magic-star" />
+                  <FolderIcon />
+                  <i className="magic-star" />
+                  {importing && <span className="import-spinner" />}
+                </span>
+              )}
+              <strong role="status">
+                {booting
+                  ? '正在连接本地服务'
+                  : importing
+                    ? '正在导入项目…'
+                    : dragging
+                      ? '松开以导入项目'
+                      : ready
+                        ? '项目已就绪'
+                        : '将项目拖入这里'}
+              </strong>
+              {ready && workspace ? (
+                <>
+                  <span className="selected-project" title={workspace.root}>
+                    <span className="project-name-icon" aria-hidden="true">
+                      <FolderIcon />
+                    </span>
+                    <span className="project-name">{workspace.name}</span>
+                  </span>
+                  <span className="drop-description" title={selectedFile || undefined}>
+                    {selectedFile ? '已导入代码文件' : '已导入项目文件夹'}
+                  </span>
+                  <span className="project-ready-hint">可开始代码注释或项目解析</span>
+                  <span className="project-replace-hint">点击或拖入以更换项目</span>
+                </>
+              ) : (
+                <span className="drop-description">拖入整个项目文件夹或代码文件</span>
+              )}
             </span>
-            <strong>
-              {booting
-                ? '正在连接本地服务'
-                : importing
-                  ? '正在导入项目…'
-                  : dragging
-                    ? '松开以导入项目'
-                    : '将项目拖入这里'}
-            </strong>
-            <span className="drop-description">拖入整个项目文件夹或代码文件</span>
-            {workspace && (
-              <span className="selected-project" title={workspace.root}>
-                当前项目：{workspace.name}
-              </span>
-            )}
-          </span>
-        </button>
+          </button>
+          {workspace && !booting && (
+            <button
+              type="button"
+              className="project-clear"
+              aria-label="清除当前项目"
+              title={clearDisabled ? '请先结束当前操作，再清除项目' : '清除当前项目（不删除文件）'}
+              disabled={clearDisabled || importing}
+              onClick={onClear}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m7 7 10 10M17 7 7 17" />
+              </svg>
+            </button>
+          )}
+        </div>
         <div className="home-actions">
           <button
             className="home-action home-action-comment"

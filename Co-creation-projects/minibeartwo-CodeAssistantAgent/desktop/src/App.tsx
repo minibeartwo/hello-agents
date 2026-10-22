@@ -13,6 +13,7 @@ const terminal = new Set([
   'budget_exhausted',
   'rejected',
 ]);
+const activeWorkspaceKey = 'code-assistant.active-workspace';
 const presets: Record<HomeAction, string> = {
   comment:
     '【代码注释】请为当前项目代码添加清晰、准确的中文注释，说明文件职责、函数用途、参数与返回值，并解释必要的专业术语。保留现有代码逻辑与项目结构，避免重复或无意义的注释。先阅读项目，提出修改供我审阅。',
@@ -40,6 +41,7 @@ async function projectTasks(workspaceId: string) {
 export function App() {
   const [booting, setBooting] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [importRevision, setImportRevision] = useState(0);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
@@ -77,7 +79,12 @@ export function App() {
       .bootstrap()
       .then((value) => {
         setSettings(value.settings);
-        setWorkspace(value.workspaces[0] || null);
+        const selectedId = localStorage.getItem(activeWorkspaceKey);
+        setWorkspace(
+          selectedId === null
+            ? value.workspaces[0] || null
+            : value.workspaces.find((item) => item.id === selectedId) || null,
+        );
       })
       .catch(report)
       .finally(() => setBooting(false));
@@ -166,13 +173,34 @@ export function App() {
   }, [task?.id, refreshTask, report, selectTask]);
 
   function setProject(next: Workspace, file: string | null) {
+    localStorage.setItem(activeWorkspaceKey, next.id);
     selectTask(null);
     if (next.id !== workspace?.id) {
       setDrafts({ ...presets });
       setVisited(false);
     }
     setWorkspace(next);
+    setImportRevision((revision) => revision + 1);
     setSelectedFile(file);
+    setError('');
+  }
+  function clearProject() {
+    if (booting || importing || busy || sending || operationPending) return;
+    localStorage.setItem(activeWorkspaceKey, '');
+    workspaceRef.current = null;
+    selectTask(null);
+    setWorkspace(null);
+    setSelectedFile(null);
+    setImportRevision(0);
+    setFeatureOpen(false);
+    setVisited(false);
+    setAction('comment');
+    setDrafts({ ...presets });
+    setTasks([]);
+    setActivity([]);
+    setLogs('');
+    setTestEnabled(false);
+    setTestCommand('python -m pytest -q');
     setError('');
   }
   async function chooseProject() {
@@ -312,6 +340,10 @@ export function App() {
         workspace={workspace}
         booting={booting}
         importing={importing}
+        importRevision={importRevision}
+        selectedFile={selectedFile}
+        clearDisabled={busy || sending || operationPending}
+        onClear={clearProject}
         onChoose={() => void chooseProject()}
         onDrop={(file) => void dropProject(file)}
         onAction={(next) => void openFeature(next)}

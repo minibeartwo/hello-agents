@@ -128,6 +128,24 @@ async function launch() {
 }
 
 async function dropNativePath(page, nativePath) {
+  await page.evaluate(() => {
+    window.__dropEvents = [];
+    if (window.__dropObserved) return;
+    window.__dropObserved = true;
+    for (const type of ['dragenter', 'dragover', 'drop'])
+      document.addEventListener(
+        type,
+        (event) => {
+          window.__dropEvents.push({
+            type,
+            target: event.target.tagName,
+            files: event.dataTransfer.files.length,
+            disabled: document.querySelector('.project-drop').disabled,
+          });
+        },
+        true,
+      );
+  });
   const target = await page.locator('.project-drop').boundingBox();
   assert.ok(target, 'the project drop target is visible');
   const client = await page.context().newCDPSession(page);
@@ -135,11 +153,30 @@ async function dropNativePath(page, nativePath) {
     const data = { items: [], files: [nativePath], dragOperationsMask: 1 };
     for (const type of ['dragEnter', 'dragOver', 'drop']) {
       await client.send('Input.dispatchDragEvent', {
-        type, x: target.x + target.width / 2, y: target.y + target.height / 2, data,
+        type,
+        x: target.x + target.width / 2,
+        y: target.y + target.height / 2,
+        data,
       });
     }
-  } finally { await client.detach(); }
+  } finally {
+    await client.detach();
+  }
+  await page.waitForFunction(() =>
+    window.__dropEvents.some((event) => event.type === 'drop' && event.files > 0),
+  );
   await page.locator('.project-drop:not(:disabled)').waitFor();
+  await writeFile(
+    path.join(artifacts, `drop-${Date.now()}.json`),
+    JSON.stringify(
+      await page.evaluate(() => ({
+        events: window.__dropEvents,
+        text: document.querySelector('.project-drop').innerText,
+      })),
+      null,
+      2,
+    ),
+  );
 }
 
 async function waitForNativeState(application, property, expected) {
@@ -279,6 +316,122 @@ async function inspectHome(page, application) {
   homeChecks.push('custom titlebar maximizes, restores, and minimizes the native client');
 }
 
+async function inspectImportedProject(page, application) {
+  await page.locator('.project-drop.is-ready').waitFor();
+  assert.equal(await page.locator('.project-drop [role="status"]').innerText(), '项目已就绪');
+  await page.locator('.is-celebrating .project-success-badge').waitFor();
+  await page.waitForTimeout(350);
+  await nativeScreenshot(application, 'project-import-success.png');
+  await page.locator('.home-grid.is-celebrating').waitFor({ state: 'detached' });
+  const animations = await page
+    .locator('.project-drop')
+    .evaluate(
+      (element) =>
+        element
+          .getAnimations({ subtree: true })
+          .filter((animation) => animation.playState === 'running').length,
+    );
+  assert.equal(animations, 0, 'the success animation settles rather than looping');
+  for (const [width, height] of [
+    [650, 500],
+    [640, 480],
+  ]) {
+    await application.evaluate(
+      ({ BrowserWindow }, size) =>
+        BrowserWindow.getAllWindows()
+          .find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手')
+          .setSize(size.width, size.height),
+      { width, height },
+    );
+    await page.waitForFunction(
+      ({ width, height }) =>
+        Math.abs(innerWidth * 0.65625 - width) <= 2 &&
+        Math.abs(innerHeight * 0.65625 - height) <= 2,
+      { width, height },
+    );
+    const fits = await page.locator('.project-drop').evaluate((card) => {
+      const bounds = card.getBoundingClientRect();
+      return (
+        [
+          ...card.querySelectorAll(
+            '.project-ready-art, strong, .selected-project, .drop-description, .project-ready-hint, .project-replace-hint',
+          ),
+        ].every((element) => {
+          const box = element.getBoundingClientRect();
+          return (
+            box.left >= bounds.left &&
+            box.right <= bounds.right &&
+            box.top >= bounds.top &&
+            box.bottom <= bounds.bottom
+          );
+        }) &&
+        document.documentElement.scrollWidth <= innerWidth &&
+        document.documentElement.scrollHeight <= innerHeight
+      );
+    });
+    assert.ok(fits, `success illustration and labels fit at ${width}×${height}`);
+    await nativeScreenshot(application, `project-ready-${width}.png`);
+  }
+  await application.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()
+      .find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手')
+      .setSize(650, 500),
+  );
+  homeChecks.push(
+    'project import changes illustration, success badge, headline and name; finite motion fits normal and minimum client sizes',
+  );
+
+  await application.evaluate(({ dialog }) => {
+    dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
+  });
+  await page.getByRole('button', { name: '导入项目', exact: true }).click();
+  await page.locator('.project-drop.is-ready').waitFor();
+  assert.equal(
+    await page.locator('.home-grid.is-celebrating').count(),
+    0,
+    'cancelling selection does not replay success',
+  );
+  await application.evaluate(
+    ({ dialog }, missing) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [missing] });
+    },
+    path.join(artifacts, 'missing-project'),
+  );
+  await page.getByRole('button', { name: '导入项目', exact: true }).click();
+  await page.locator('.error-banner').waitFor();
+  await page.locator('.project-drop.is-ready').waitFor();
+  assert.match(await page.locator('.selected-project').innerText(), /calculator-demo/);
+  assert.equal(
+    await page.locator('.home-grid.is-celebrating').count(),
+    0,
+    'failed import preserves the previous project without a new success pulse',
+  );
+  await page.getByRole('button', { name: '关闭错误提示', exact: true }).click();
+  homeChecks.push(
+    'cancelled or failed replacement preserves the selected project without claiming new import success',
+  );
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await dropNativePath(page, workspace);
+  await page.locator('.project-drop.is-ready').waitFor();
+  const reducedAnimations = await page
+    .locator('.home-grid')
+    .evaluate(
+      (element) =>
+        element
+          .getAnimations({ subtree: true })
+          .filter((animation) => animation.playState === 'running').length,
+    );
+  assert.equal(reducedAnimations, 0, 'reduced motion keeps the success state static');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.locator('.home-grid.is-celebrating').waitFor({ state: 'detached' });
+  await dropNativePath(page, workspace);
+  await page.locator('.is-celebrating .project-success-badge').waitFor();
+  homeChecks.push(
+    'reimporting the same folder replays success; reduced motion retains clear static confirmation',
+  );
+}
+
 try {
   let opened = await launch();
   app = opened.instance;
@@ -295,6 +448,24 @@ try {
   await page.locator('.selected-project').filter({ hasText: 'calculator-demo' }).waitFor();
   assert.equal(await app.evaluate(() => global.__nativeFolderSelections), 1);
   homeChecks.push('native folder picker imports the project on the blue client');
+  await inspectImportedProject(page, app);
+  await app.evaluate(({ dialog }) => {
+    global.__clearChooserCalls = 0;
+    dialog.showOpenDialog = async () => {
+      global.__clearChooserCalls++;
+      return { canceled: true, filePaths: [] };
+    };
+  });
+  await page.getByRole('button', { name: '清除当前项目', exact: true }).click();
+  await page.locator('.project-drop:not(.is-ready)').waitFor();
+  assert.equal(await page.locator('.project-drop [role="status"]').innerText(), '将项目拖入这里');
+  assert.equal(await page.locator('.project-clear, .selected-project, .home-grid.is-celebrating').count(), 0);
+  assert.equal(await app.evaluate(() => global.__clearChooserCalls), 0,
+    'the separate clear button never opens the project picker');
+  assert.equal(await readFile(path.join(workspace, 'calculator.py'), 'utf8'), original,
+    'clearing the selection leaves project files unchanged');
+  await nativeScreenshot(app, 'project-cleared.png');
+  homeChecks.push('clear button resets the drop panel during success feedback without opening the picker or deleting files');
   await dropNativePath(page, workspace);
   await page.locator('.selected-project').filter({ hasText: 'calculator-demo' }).waitFor();
   await page.locator('.home-action-comment').click();
@@ -390,6 +561,12 @@ try {
   app = opened.instance;
   page = opened.page;
   await assertNoLegacyInterface(page);
+  await page.locator('.project-drop.is-ready').waitFor();
+  assert.equal(
+    await page.locator('.home-grid.is-celebrating').count(),
+    0,
+    'restoring an existing project after restart does not pretend a new drop occurred',
+  );
   await page.locator('.home-action-comment').click();
   await page.getByRole('combobox', { name: '历史任务', exact: true }).selectOption(annotationTaskId);
   await page.locator('.task-status.completed').waitFor();
@@ -405,6 +582,29 @@ try {
   assert.equal(await page.locator('input[name="model"]').inputValue(), 'local-protocol-test');
   await page.getByRole('button', { name: '保存连接', exact: true }).click();
   homeChecks.push('restart restores annotation and documentation history plus the saved model connection');
+  await page.getByRole('button', { name: '关闭任务面板', exact: true }).click();
+  await page.getByRole('button', { name: '清除当前项目', exact: true }).click();
+  await page.locator('.project-drop:not(.is-ready)').waitFor();
+  assert.equal(await page.getByRole('button', { name: '继续任务', exact: true }).count(), 0,
+    'clearing a project also clears its active task and unsent context');
+  await app.close();
+  app = null;
+  opened = await launch();
+  app = opened.instance;
+  page = opened.page;
+  assert.equal(await page.locator('.project-drop [role="status"]').innerText(), '将项目拖入这里');
+  assert.equal(await page.locator('.project-clear, .selected-project').count(), 0,
+    'a cleared project stays cleared across restart');
+  await dropNativePath(page, workspace);
+  await page.locator('.project-drop.is-ready').waitFor();
+  await page.locator('.home-action-comment').click();
+  await page.getByRole('combobox', { name: '历史任务', exact: true }).waitFor();
+  const retainedTasks = await page.getByRole('combobox', { name: '历史任务', exact: true }).locator('option').evaluateAll(
+    (options) => options.map((option) => option.value));
+  assert.ok(retainedTasks.includes(annotationTaskId) && retainedTasks.includes(analysisTaskId),
+    'reimporting after clear restores the existing task history');
+  assert.equal(await readFile(path.join(workspace, 'PROJECT.md'), 'utf8'), documentation);
+  homeChecks.push('cleared selection persists after restart; reimport restores project history and leaves generated files intact');
   assert.deepEqual(errors, []);
   await writeFile(
     path.join(artifacts, 'result.json'),
