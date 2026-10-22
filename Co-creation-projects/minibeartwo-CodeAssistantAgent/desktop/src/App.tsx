@@ -91,6 +91,11 @@ export function App() {
   }, [report]);
 
   useEffect(() => {
+    if (!window.codeAssistant) return;
+    return window.codeAssistant.onOpenSettings(() => setSettingsOpen(true));
+  }, []);
+
+  useEffect(() => {
     selectTask(null);
     setTasks([]);
     setActivity([]);

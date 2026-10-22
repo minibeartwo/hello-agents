@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .patches import Patches
+from .models import discover_models, test_connection
 from .runtime import Runtime, TERMINAL
 from .settings import Settings
 from .store import Store, identifier
@@ -43,6 +44,18 @@ class ModelSettings(BaseModel):
     api_key: str = Field(default="", max_length=2000)
     max_steps: int = Field(default=12, ge=1, le=30)
     task_timeout: int = Field(default=300, ge=30, le=1800)
+
+
+class ModelDiscovery(BaseModel):
+    base_url: str = Field(min_length=1, max_length=2000)
+    api_key: str = Field(default="", max_length=2000)
+    connection_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    use_saved_key: bool = True
+
+
+class SavedConnection(ModelSettings):
+    id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    name: str = Field(default="", max_length=100)
 
 
 class Review(BaseModel):
@@ -103,6 +116,32 @@ def create_app(data_dir: Path | None = None, token: str | None = None, model_fac
     @app.put("/api/settings")
     async def save_settings(values: ModelSettings):
         return settings.save(values.model_dump())
+
+    @app.get("/api/connections")
+    async def list_connections():
+        return settings.connections()
+
+    @app.post("/api/connections")
+    async def save_connection(values: SavedConnection):
+        return settings.save_connection(values.model_dump())
+
+    @app.delete("/api/connections/{connection_id}")
+    async def delete_connection(connection_id: str):
+        return settings.delete_connection(connection_id)
+
+    @app.post("/api/connections/{connection_id}/activate")
+    async def activate_connection(connection_id: str):
+        return settings.activate(connection_id)
+
+    @app.post("/api/models")
+    async def list_models(values: ModelDiscovery):
+        return {"models": await discover_models(values.base_url, values.api_key, settings,
+            values.connection_id, values.use_saved_key)}
+
+    @app.post("/api/connection-test")
+    async def check_connection(values: ModelDiscovery):
+        return await test_connection(values.base_url, values.api_key, settings,
+            values.connection_id, values.use_saved_key)
 
     @app.get("/api/workspaces")
     async def list_workspaces():

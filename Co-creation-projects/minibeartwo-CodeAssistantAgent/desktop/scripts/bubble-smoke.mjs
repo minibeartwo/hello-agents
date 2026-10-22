@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { chooseCustomProvider } from './provider-settings-helpers.mjs';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { PNG } from 'pngjs';
@@ -454,6 +455,69 @@ async function ownBackend() {
   return { pid: child.pid, endpoint: `http://127.0.0.1:${port}` };
 }
 
+async function openModelFromMenu() {
+  await application.evaluate(({ Menu }) => {
+    global.__settingsMenuPopup = Menu.prototype.popup;
+    global.__settingsMenu = null;
+    Menu.prototype.popup = function () { global.__settingsMenu = this; };
+  });
+  try {
+    await bubblePage.getByRole('button').first().dispatchEvent('contextmenu');
+    await eventually(() => application.evaluate(() => !!global.__settingsMenu),
+      'Right-clicking Phoebe creates the native menu');
+    const item = await application.evaluate(() => {
+      const entry = global.__settingsMenu.items.find((item) => item.label === '配置模型');
+      return entry ? { enabled: entry.enabled } : null;
+    });
+    assert.ok(item?.enabled, 'the native menu provides the model configuration action');
+    await application.evaluate(() => {
+      const item = global.__settingsMenu.items.find((item) => item.label === '配置模型');
+      item.click(item, null, {});
+    });
+  } finally {
+    await application.evaluate(({ Menu }) => {
+      Menu.prototype.popup = global.__settingsMenuPopup;
+      delete global.__settingsMenuPopup;
+      delete global.__settingsMenu;
+    });
+  }
+  await mainPage.getByRole('dialog', { name: '模型设置', exact: true }).waitFor();
+}
+
+async function assertModelConfigurationMenu() {
+  const before = await nativeState();
+  assert.equal(before.mainVisible, false);
+  assert.equal(await mainPage.locator('.selected-project').count(), 0);
+  await openModelFromMenu();
+  await eventually(async () => (await nativeState()).mainVisible,
+    'model configuration reveals the hidden client');
+  assert.equal((await nativeState()).mainId, before.mainId);
+  await chooseCustomProvider(mainPage, 'http://127.0.0.1:12345/v1');
+  await mainPage.locator('input[name="model"]').fill('bubble-menu-model');
+  await mainPage.getByRole('button', { name: '保存连接', exact: true }).click();
+  await mainPage.getByRole('dialog', { name: '模型设置', exact: true }).waitFor({ state: 'hidden' });
+  assert.equal(await mainPage.evaluate(async () => (await window.codeAssistant.bootstrap()).settings.model),
+    'bubble-menu-model');
+  await mainPage.evaluate(() => window.codeAssistant.windowControl('minimize'));
+  await eventually(async () => (await nativeState()).mainMinimized, 'client minimizes before menu restoration');
+  await openModelFromMenu();
+  await eventually(async () => !(await nativeState()).mainMinimized, 'model menu restores a minimized client');
+  assert.equal(await mainPage.locator('input[name="model"]').inputValue(), 'bubble-menu-model');
+  await mainPage.locator('input[name="model"]').fill('unsaved-menu-draft');
+  const reopened = await nativeState();
+  await openModelFromMenu();
+  assert.equal(await mainPage.locator('.settings-dialog').count(), 1);
+  assert.equal(await mainPage.locator('input[name="model"]').inputValue(), 'unsaved-menu-draft');
+  assert.deepEqual((await nativeState()).mainBounds, reopened.mainBounds,
+    'repeated menu selection preserves the visible client position');
+  await mainPage.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(await mainPage.evaluate(async () => (await window.codeAssistant.bootstrap()).settings.model),
+    'bubble-menu-model', 'cancel does not save the draft');
+  await mainPage.evaluate(() => window.codeAssistant.windowControl('close'));
+  await eventually(async () => !(await nativeState()).mainVisible, 'menu checks leave the client hidden');
+  checks.push('Phoebe model menu opens settings without a project, saves shared configuration, restores minimized client and preserves repeated-open drafts');
+}
+
 async function assertBackendStopped(sidecar) {
   await eventually(
     async () => {
@@ -734,6 +798,7 @@ try {
     'The visible native launcher must remain always on top');
   await assertNativeClientTransition();
   await assertMascotInteractions(animation);
+  await assertModelConfigurationMenu();
   await clickBubble();
   await eventually(
     async () => (await nativeState()).mainVisible,
@@ -753,7 +818,7 @@ try {
   await mainPage.getByRole('dialog', { name: '代码注释', exact: true }).waitFor();
   assert.equal(await mainPage.locator('.workspace-layout, .editor-area, .sidebar, .assistant-panel, .monaco-editor').count(), 0);
   await mainPage.locator('.feature-dialog').getByRole('button', { name: '模型设置', exact: true }).click();
-  await mainPage.locator('input[name="base_url"]').fill('http://127.0.0.1:12345/v1');
+  await chooseCustomProvider(mainPage, 'http://127.0.0.1:12345/v1');
   await mainPage.locator('input[name="model"]').fill('bubble-state-test');
   await mainPage.getByRole('button', { name: '保存连接', exact: true }).click();
   await mainPage.getByRole('dialog', { name: '模型设置', exact: true }).waitFor({ state: 'hidden' });
@@ -762,6 +827,12 @@ try {
   await mainPage
     .getByRole('textbox', { name: '任务需求', exact: true })
     .fill('Keep this unsent draft while the client is tucked away.');
+  await openModelFromMenu();
+  assert.equal(await mainPage.locator('input[name="model"]').inputValue(), 'bubble-state-test');
+  await mainPage.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(await mainPage.getByRole('textbox', { name: '任务需求', exact: true }).inputValue(),
+    'Keep this unsent draft while the client is tucked away.');
+  checks.push('model configuration from the native menu preserves the active project and task draft');
   await clickBubble();
   await eventually(
     async () => !(await nativeState()).mainVisible,

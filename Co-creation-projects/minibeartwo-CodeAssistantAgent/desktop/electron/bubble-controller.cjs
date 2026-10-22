@@ -194,6 +194,15 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
         enabled: ready,
         click: toggle,
       },
+      {
+        label: '配置模型',
+        enabled: ready,
+        click: () => {
+          if (!ready || mainWindow.isDestroyed()) return;
+          showClient();
+          mainWindow.webContents.send('assistant:open-settings');
+        },
+      },
       { type: 'separator' },
       { label: '退出代码助手', click: onQuit },
     ]).popup({ window: bubble });

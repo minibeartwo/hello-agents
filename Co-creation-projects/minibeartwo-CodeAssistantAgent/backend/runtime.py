@@ -91,6 +91,7 @@ class Runtime:
 
     async def run(self, task_id: str, resume: bool = False):
         model = None
+        task_key = ""
         started = time.monotonic()
         elapsed = self.store.one("tasks", task_id)["elapsed"]
         try:
@@ -126,6 +127,7 @@ class Runtime:
             }
             for name, function in functions.items():
                 registry.register_function(name, name, lambda text, func=function: json.dumps(func(json.loads(text)), ensure_ascii=False))
+            task_key = self.settings.memory_key
             model = self.factory()
             config = self.settings.public()
             async with asyncio.timeout(max(0, config["task_timeout"] - elapsed - (time.monotonic() - started))):
@@ -179,8 +181,9 @@ class Runtime:
             await self.emit(task_id, "task.budget_exhausted", {"message": "任务达到时间上限。"})
         except Exception as exc:
             message = str(exc)
-            if self.settings.memory_key:
-                message = message.replace(self.settings.memory_key, "[redacted]")
+            for key in {task_key, self.settings.memory_key}:
+                if key:
+                    message = message.replace(key, "[redacted]")
             self.store.update_task(task_id, status="failed", result=message)
             await self.emit(task_id, "task.failed", {"message": message[:1000]})
         finally:

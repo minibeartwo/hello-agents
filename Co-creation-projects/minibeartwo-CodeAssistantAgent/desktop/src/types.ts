@@ -33,12 +33,18 @@ export interface Task {
   patches?: Patch[];
 }
 export interface ModelSettings {
+  connection_id: string | null;
+  connection_name: string;
   model: string;
   base_url: string;
   has_api_key: boolean;
   key_storage: string;
   max_steps: number;
   task_timeout: number;
+}
+export interface SavedConnection extends Omit<ModelSettings, 'connection_id' | 'connection_name'> {
+  id: string;
+  name: string;
 }
 export interface TaskEvent {
   id?: number;
@@ -62,6 +68,7 @@ export interface Bridge {
   request<T>(method: string, path: string, body?: unknown): Promise<T>;
   watchTask(id: string, after?: number): Promise<void>;
   unwatchTask(id: string): Promise<void>;
+  onOpenSettings(listener: () => void): () => void;
   onEvent(listener: (event: TaskEvent) => void): () => void;
 }
 declare global {

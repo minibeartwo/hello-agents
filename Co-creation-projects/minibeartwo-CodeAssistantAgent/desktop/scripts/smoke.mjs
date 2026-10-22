@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { access, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { chooseCustomProvider } from './provider-settings-helpers.mjs';
 
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = path.resolve(desktop, '..');
@@ -20,9 +21,22 @@ await writeFile(path.join(workspace, 'notes.md'), '# 项目备注\n');
 const updated = original.replace('    return left + right', '    """返回两个整数之和，保留原有加法逻辑。"""\n    return left + right');
 const documentation = '# 项目说明\n\n本项目提供整数加法函数 `add(left, right)`。\n\n运行测试：`python -m pytest -q`。\n';
 let modelCalls = 0;
+let discoveryMode = 'ok';
+const discoveryRequests = [];
 const requests = [];
 const provider = createServer(async (request, response) => {
   try {
+    if (request.method === 'GET' && request.url.endsWith('/models')) {
+      const mode = discoveryMode;
+      discoveryRequests.push({ url: request.url, authorization: request.headers.authorization });
+      if (mode === 'delayed') await new Promise((resolve) => setTimeout(resolve, 400));
+      response.writeHead(mode === 'unauthorized' ? 401 : mode === 'unsupported' ? 404 : 200,
+        { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(mode === 'unauthorized' ? { error: 'model-list-test-key' } :
+        { data: mode === 'empty' ? [] : (mode === 'delayed' ? ['stale-model'] :
+          ['local-protocol-test', 'another-model', 'local-protocol-test']).map((id) => ({ id })) }));
+      return;
+    }
     let body = '';
     for await (const chunk of request) body += chunk;
     const input = JSON.parse(body);
@@ -414,6 +428,8 @@ async function inspectImportedProject(page, application) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await dropNativePath(page, workspace);
   await page.locator('.project-drop.is-ready').waitFor();
+  await page.waitForFunction(() => document.querySelector('.home-grid')
+    .getAnimations({ subtree: true }).every((animation) => animation.playState !== 'running'));
   const reducedAnimations = await page
     .locator('.home-grid')
     .evaluate(
@@ -430,6 +446,205 @@ async function inspectImportedProject(page, application) {
   homeChecks.push(
     'reimporting the same folder replays success; reduced motion retains clear static confirmation',
   );
+}
+
+async function inspectProviderSelection(page, application) {
+  const before = await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings);
+  const provider = page.getByRole('combobox', { name: 'API 服务商', exact: true });
+  await provider.selectOption('deepseek');
+  assert.equal(await page.locator('.provider-address > span').innerText(), 'https://api.deepseek.com');
+  await page.locator('input[name="model"]').fill('deepseek-draft-model');
+  await page.locator('input[name="api_key"]').fill('deepseek-draft-key');
+  await provider.selectOption('kimi');
+  assert.equal(await page.locator('.provider-address > span').innerText(), 'https://api.moonshot.cn/v1');
+  assert.equal(await page.locator('input[name="model"]').inputValue(), '');
+  assert.equal(await page.locator('input[name="api_key"]').inputValue(), '');
+  await page.locator('input[name="model"]').fill('kimi-draft-model');
+  await provider.selectOption('custom');
+  const popup = page.getByRole('dialog', { name: '自定义服务商', exact: true });
+  await popup.waitFor();
+  await page.waitForFunction(() => document.activeElement.id === 'custom-api-address');
+  await popup.locator('input[name="base_url"]').fill('ftp://invalid.example/v1');
+  await popup.getByRole('button', { name: '使用此地址', exact: true }).click();
+  await popup.getByRole('alert').filter({ hasText: 'HTTP(S)' }).waitFor();
+  await page.keyboard.press('Escape');
+  await popup.waitFor({ state: 'hidden' });
+  assert.equal(await page.getByRole('dialog', { name: '模型设置', exact: true }).count(), 1);
+  assert.equal(await provider.inputValue(), 'kimi', 'cancelling custom input preserves the previous provider');
+  assert.equal(await page.locator('input[name="model"]').inputValue(), 'kimi-draft-model');
+  await chooseCustomProvider(page, '  ' + baseUrl + '/draft/  ');
+  assert.equal(await provider.inputValue(), 'custom');
+  assert.equal(await page.locator('.provider-address > span').innerText(), baseUrl + '/draft');
+  await page.getByRole('button', { name: '编辑地址', exact: true }).click();
+  await popup.waitFor();
+  assert.equal(await popup.locator('input[name="base_url"]').inputValue(), baseUrl + '/draft');
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await nativeScreenshot(application, 'custom-provider-native.png');
+  await popup.locator('input[name="base_url"]').fill(baseUrl + '/not-confirmed');
+  await popup.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(await page.locator('.provider-address > span').innerText(), baseUrl + '/draft');
+  await provider.selectOption('deepseek');
+  await provider.selectOption('custom');
+  await popup.waitFor();
+  assert.equal(await popup.locator('input[name="base_url"]').inputValue(), baseUrl + '/draft');
+  await popup.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(await provider.inputValue(), 'deepseek');
+  assert.deepEqual(await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings), before,
+    'provider selection remains a draft until saving');
+  await chooseCustomProvider(page, baseUrl);
+  homeChecks.push('provider dropdown presets, custom popup validation and Escape, cancelled edits and custom address recall preserve unsaved settings');
+}
+
+async function inspectModelDiscovery(page, application) {
+  const before = await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings);
+  await chooseCustomProvider(page, baseUrl);
+  await page.locator('input[name="api_key"]').fill('model-list-test-key');
+  await page.locator('input[name="model"]').fill('');
+  await page.getByRole('button', { name: '测试连接', exact: true }).click();
+  await page.locator('.api-connection-status.is-success').filter({ hasText: '连接成功' }).waitFor();
+  assert.match(await page.locator('.api-connection-status').innerText(), /毫秒/);
+  assert.equal(await page.locator('.model-name-row select').count(), 0,
+    'testing the API does not replace the model entry or require a model name');
+  assert.deepEqual(await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings), before);
+  discoveryMode = 'unauthorized';
+  await page.getByRole('button', { name: '测试连接', exact: true }).click();
+  await page.locator('.api-connection-status.is-error').filter({ hasText: 'API Key' }).waitFor();
+  assert.doesNotMatch(await page.locator('.api-connection-status').innerText(), /model-list-test-key/);
+  discoveryMode = 'unsupported';
+  await page.getByRole('button', { name: '测试连接', exact: true }).click();
+  await page.locator('.api-connection-status.is-warning').filter({ hasText: '尚未确认调用权限' }).waitFor();
+  discoveryMode = 'delayed';
+  const connectionRequests = discoveryRequests.length;
+  await page.getByRole('button', { name: '测试连接', exact: true }).click();
+  const connectionDeadline = Date.now() + 5000;
+  while (discoveryRequests.length === connectionRequests && Date.now() < connectionDeadline)
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.ok(discoveryRequests.length > connectionRequests);
+  await page.locator('input[name="api_key"]').fill('changed-draft-key');
+  await page.waitForTimeout(600);
+  assert.equal(await page.locator('.api-connection-status').innerText(), '',
+    'a late connection result cannot validate edited credentials');
+  await page.locator('input[name="api_key"]').fill('model-list-test-key');
+  discoveryMode = 'ok';
+  await page.getByRole('button', { name: '测试连接', exact: true }).click();
+  await page.locator('.api-connection-status.is-success').waitFor();
+  homeChecks.push('API test button uses draft credentials without a model or save, shows elapsed time and handles auth, unsupported detection and stale results');
+  await page.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  const selector = page.getByRole('combobox', { name: '模型名称', exact: true });
+  await selector.waitFor();
+  assert.equal(await selector.locator('option').count(), 3, 'duplicate provider IDs are removed');
+  assert.equal(discoveryRequests.at(-1).authorization, 'Bearer model-list-test-key');
+  assert.equal(discoveryRequests.at(-1).url, '/v1/models');
+  assert.deepEqual(await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings), before,
+    'fetching with draft credentials does not save the configuration');
+  await selector.selectOption('local-protocol-test');
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await nativeScreenshot(application, 'model-list-native.png');
+  await page.getByRole('button', { name: '手动填写', exact: true }).click();
+  assert.equal(await page.locator('input[name="model"]').inputValue(), 'local-protocol-test');
+  await page.getByRole('button', { name: '从列表选择', exact: true }).click();
+  assert.equal(await selector.inputValue(), 'local-protocol-test');
+  discoveryMode = 'empty';
+  await page.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await page.locator('.model-fetch-status').filter({ hasText: '未返回可用模型' }).waitFor();
+  assert.equal(await page.locator('input[name="model"]').inputValue(), 'local-protocol-test');
+  discoveryMode = 'unauthorized';
+  await page.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await page.locator('.model-fetch-error').filter({ hasText: 'API Key' }).waitFor();
+  assert.doesNotMatch(await page.locator('.model-fetch-error').innerText(), /model-list-test-key/);
+  discoveryMode = 'unsupported';
+  await page.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await page.locator('.model-fetch-error').filter({ hasText: '不支持' }).waitFor();
+  discoveryMode = 'delayed';
+  const previousRequests = discoveryRequests.length;
+  await page.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  const deadline = Date.now() + 5000;
+  while (discoveryRequests.length === previousRequests && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.ok(discoveryRequests.length > previousRequests);
+  await chooseCustomProvider(page, baseUrl + '/changed');
+  await page.waitForTimeout(600);
+  assert.equal(await page.locator('.model-name-row select').count(), 0, 'late responses cannot populate a changed provider');
+  assert.equal(await page.locator('.model-fetch-status').innerText(), '');
+  assert.equal(await page.locator('input[name="model"]').inputValue(), '',
+    'changing a provider endpoint clears the previous model selection');
+  discoveryMode = 'ok';
+  await page.locator('input[name="api_key"]').fill('');
+  await chooseCustomProvider(page, baseUrl);
+  assert.equal(modelCalls, 0, 'model discovery never starts a generation task');
+  homeChecks.push('draft model discovery uses the native IPC and HTTP route, deduplicates IDs, selects models and supports manual input without saving');
+  homeChecks.push('empty, unsupported and unauthorized model lists preserve manual input; stale provider responses are ignored');
+}
+
+async function inspectSavedConnections(page, application) {
+  const current = await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings);
+  const originalId = current.connection_id;
+  const open = async () => {
+    await page.locator('.feature-dialog').getByRole('button', { name: '模型设置', exact: true }).click();
+    await page.getByRole('dialog', { name: '模型设置', exact: true }).waitFor();
+    await page.getByRole('button', { name: '新建配置', exact: true }).waitFor({ state: 'visible' });
+    await page.waitForFunction(() => !document.querySelector('.connection-presets-heading button').disabled);
+  };
+  await open();
+  const list = page.getByRole('combobox', { name: '配置列表', exact: true });
+  assert.equal(await list.inputValue(), originalId);
+  await page.getByRole('textbox', { name: '配置名称', exact: true }).fill('日常代码助手');
+  await page.getByRole('button', { name: '保存连接', exact: true }).click();
+  await page.getByRole('dialog', { name: '模型设置', exact: true }).waitFor({ state: 'hidden' });
+  await open();
+  assert.equal(await list.locator('option').count(), 2, 'editing a saved configuration does not duplicate it');
+  await page.getByRole('button', { name: '新建配置', exact: true }).click();
+  assert.equal(await list.inputValue(), '');
+  assert.equal(await page.locator('input[name="model"]').inputValue(), '');
+  assert.equal(await page.locator('input[name="api_key"]').inputValue(), '');
+  assert.equal(await page.getByRole('combobox', { name: 'API 服务商', exact: true }).inputValue(), '');
+  assert.equal(await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings.connection_id), originalId,
+    'creating a draft does not change the active connection');
+  await chooseCustomProvider(page, baseUrl);
+  await page.getByRole('textbox', { name: '配置名称', exact: true }).fill('备用配置');
+  await page.locator('input[name="model"]').fill('alternate-local-model');
+  await page.locator('input[name="api_key"]').fill('secondary-test-key');
+  await page.getByRole('button', { name: '保存连接', exact: true }).click();
+  await page.getByRole('dialog', { name: '模型设置', exact: true }).waitFor({ state: 'hidden' });
+  const second = await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings);
+  assert.notEqual(second.connection_id, originalId);
+  await open();
+  assert.equal(await list.locator('option').count(), 3);
+  await list.selectOption(originalId);
+  await page.waitForFunction(() => document.querySelector('input[name="model"]').value === 'local-protocol-test');
+  assert.equal(await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings.connection_id), originalId);
+  await list.selectOption(second.connection_id);
+  await page.waitForFunction(() => document.querySelector('input[name="model"]').value === 'alternate-local-model');
+  assert.equal(await page.locator('input[name="api_key"]').inputValue(), '');
+  await page.getByRole('button', { name: '测试连接', exact: true }).click();
+  await page.locator('.api-connection-status.is-success').waitFor();
+  assert.equal(discoveryRequests.at(-1).authorization, 'Bearer secondary-test-key',
+    'selecting a saved connection restores its separate key without exposing it to the renderer');
+  await list.selectOption(originalId);
+  await page.waitForFunction(() => document.querySelector('input[name="model"]').value === 'local-protocol-test');
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await nativeScreenshot(application, 'saved-connections-native.png');
+  await page.getByRole('button', { name: '新建配置', exact: true }).click();
+  await page.getByRole('textbox', { name: '配置名称', exact: true }).fill('未保存的新配置');
+  assert.equal(await page.getByRole('button', { name: '删除配置', exact: true }).isDisabled(), true);
+  await chooseCustomProvider(page, baseUrl);
+  await page.locator('input[name="model"]').fill('temporary-delete-model');
+  await page.getByRole('button', { name: '保存连接', exact: true }).click();
+  await page.getByRole('dialog', { name: '模型设置', exact: true }).waitFor({ state: 'hidden' });
+  await open();
+  assert.equal(await list.locator('option').count(), 4);
+  await page.getByRole('button', { name: '删除配置', exact: true }).click();
+  await page.waitForFunction((id) => document.querySelector('#saved-connection').value === id, originalId);
+  assert.equal(await list.locator('option').count(), 3);
+  assert.equal(await page.locator('input[name="model"]').inputValue(), 'local-protocol-test');
+  assert.equal(await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings.connection_id), originalId);
+  await nativeScreenshot(application, 'delete-connection-native.png');
+  await page.getByRole('button', { name: '新建配置', exact: true }).click();
+  await page.getByRole('textbox', { name: '配置名称', exact: true }).fill('未保存的新配置');
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(await page.evaluate(async () => (await window.codeAssistant.bootstrap()).settings.connection_id), originalId);
+  homeChecks.push('saved connection list edits in place, creates separate profiles, switches active models and keys immediately, and cancels unsaved new drafts');
+  homeChecks.push('delete configuration uses native IPC, removes the saved entry, restores the remaining active configuration and is disabled for unsaved drafts');
 }
 
 try {
@@ -492,10 +707,13 @@ try {
   await page.locator('.home-action-comment').click();
   await page.locator('.feature-dialog').getByRole('button', { name: '模型设置', exact: true }).click();
   await page.getByRole('dialog', { name: '模型设置', exact: true }).waitFor();
-  await page.locator('input[name="base_url"]').fill(baseUrl);
+  await inspectProviderSelection(page, app);
+  await inspectModelDiscovery(page, app);
+  await chooseCustomProvider(page, baseUrl);
   await page.locator('input[name="model"]').fill('local-protocol-test');
   await page.getByRole('button', { name: '保存连接', exact: true }).click();
   await page.getByRole('dialog', { name: '模型设置', exact: true }).waitFor({ state: 'hidden' });
+  await inspectSavedConnections(page, app);
   await page
     .getByRole('textbox', { name: '任务需求', exact: true })
     .fill('为 add 函数添加清晰的中文注释，保留原有计算逻辑，并运行测试验证。');
@@ -580,6 +798,12 @@ try {
   await assertNoLegacyInterface(page);
   await page.locator('.feature-dialog').getByRole('button', { name: '模型设置', exact: true }).click();
   assert.equal(await page.locator('input[name="model"]').inputValue(), 'local-protocol-test');
+  assert.equal(await page.getByRole('combobox', { name: 'API 服务商', exact: true }).inputValue(), 'custom');
+  assert.equal(await page.locator('.provider-address > span').innerText(), baseUrl);
+  await page.waitForFunction(() => !document.querySelector('#saved-connection').disabled);
+  assert.equal(await page.getByRole('combobox', { name: '配置列表', exact: true }).locator('option').count(), 3,
+    'both saved connections survive application restart');
+  assert.equal(await page.getByRole('textbox', { name: '配置名称', exact: true }).inputValue(), '日常代码助手');
   await page.getByRole('button', { name: '保存连接', exact: true }).click();
   homeChecks.push('restart restores annotation and documentation history plus the saved model connection');
   await page.getByRole('button', { name: '关闭任务面板', exact: true }).click();

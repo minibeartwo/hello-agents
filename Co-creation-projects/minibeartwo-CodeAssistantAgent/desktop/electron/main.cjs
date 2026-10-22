@@ -73,13 +73,15 @@ function allowed(method, route) {
   const routes = {
     GET: [
       'settings',
+      'connections',
       'workspaces',
       'sessions',
       `sessions/${id}/tasks`,
       `tasks/${id}`,
     ],
     PUT: ['settings'],
-    POST: ['tasks', `tasks/${id}/cancel`, `patches/${id}/(review|undo)`],
+    DELETE: [`connections/${id}`],
+    POST: ['models', 'connection-test', 'connections', `connections/${id}/activate`, 'tasks', `tasks/${id}/cancel`, `patches/${id}/(review|undo)`],
   };
   return (routes[method] || []).some((pattern) => new RegExp(`^/api/${pattern}$`).test(pathname));
 }

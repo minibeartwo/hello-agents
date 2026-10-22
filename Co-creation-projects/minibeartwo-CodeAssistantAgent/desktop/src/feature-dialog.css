@@ -320,57 +320,298 @@
 }
 .modal-shade.settings-shade {
   z-index: 30;
+  padding: 12px 20px;
 }
-.settings-dialog {
-  width: min(570px, calc(100% - 48px));
-  max-height: calc(100% - 100px);
+.settings-shade .settings-dialog {
+  width: min(840px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 20px;
+  font-size: 18px;
+}
+.settings-body {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
-  padding: 25px;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
-.settings-dialog .dialog-heading {
+.settings-shade .settings-dialog .dialog-heading {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
-.settings-dialog > label,
-.settings-dialog .form-row > label {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 16px;
-  color: #b9d8ee;
+.settings-shade .settings-dialog h2 {
+  font-size: 32px;
+}
+.settings-shade .settings-dialog .feature-eyebrow {
   font-size: 12px;
 }
-.settings-dialog input {
-  width: 100%;
-  padding: 10px 12px;
+.settings-shade .settings-dialog .feature-close {
+  width: 42px;
+  height: 42px;
+  font-size: 32px;
 }
-.settings-dialog .form-row {
+.settings-shade .settings-dialog .muted {
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 10px 0;
+}
+.settings-shade .settings-dialog .settings-body > label,
+.settings-shade .settings-dialog .form-row > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  color: #b9d8ee;
+  font-size: 17px;
+  line-height: 1.45;
+}
+.settings-shade .settings-dialog input {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  font-size: 18px;
+  line-height: 1.4;
+}
+.settings-shade .settings-dialog .model-field,
+.settings-shade .settings-dialog .api-connection-field {
+  margin-top: 12px;
+  color: #b9d8ee;
+  font-size: 17px;
+  line-height: 1.45;
+}
+.model-field-heading,
+.api-address-row,
+.model-name-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.api-connection-field > label {
+  display: block;
+  margin-bottom: 6px;
+}
+.model-field-heading {
+  justify-content: space-between;
+  min-height: 25px;
+  margin-bottom: 6px;
+}
+.settings-shade .settings-dialog .model-entry-toggle {
+  padding: 0 3px;
+  font-size: 15px;
+  color: #91e6ff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.settings-shade .settings-dialog .model-name-row input,
+.settings-shade .settings-dialog .model-name-row select,
+.settings-shade .settings-dialog .api-address-row input,
+.settings-shade .settings-dialog .api-address-row select {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+}
+.settings-shade .settings-dialog .model-name-row select,
+.settings-shade .settings-dialog .api-address-row select {
+  min-height: 44px;
+  padding: 8px 12px;
+  font-size: 18px;
+  line-height: 1.4;
+}
+.settings-shade .settings-dialog .model-fetch,
+.settings-shade .settings-dialog .connection-test {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 8px 15px;
+  white-space: nowrap;
+  font-size: 17px;
+}
+.model-fetch-status,
+.model-fetch-error,
+.api-connection-status {
+  display: block;
+  margin-top: 5px;
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.model-fetch-status:empty,
+.api-connection-status:empty {
+  display: none;
+}
+.model-fetch-status {
+  color: #8cdded;
+}
+.model-fetch-error {
+  color: #ffbcac;
+}
+.api-connection-status {
+  color: #8cdded;
+}
+.api-connection-status.is-success {
+  color: #9be8cc;
+}
+.api-connection-status.is-warning {
+  color: #f5d48b;
+}
+.api-connection-status.is-error {
+  color: #ffbcac;
+}
+.provider-address {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 5px;
+  color: #9fc4df;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.connection-presets {
+  padding: 12px;
+  border: 1px solid #8bd3ff66;
+  border-radius: 12px;
+  background: #153f6e6e;
+}
+.connection-presets-heading,
+.connection-presets-fields {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.connection-presets-heading {
+  justify-content: space-between;
+  margin-bottom: 7px;
+  font-size: 17px;
+}
+.connection-presets-heading button {
+  padding: 4px 12px;
+  font-size: 16px;
+}
+.connection-presets-actions {
+  display: flex;
+  gap: 8px;
+}
+.connection-presets-heading .connection-delete {
+  color: #ffd0d0;
+  border-color: #ffb3b377;
+}
+.settings-shade .settings-dialog .connection-presets-fields select,
+.settings-shade .settings-dialog .connection-presets-fields input {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  min-height: 42px;
+  padding: 8px 10px;
+  font-size: 17px;
+}
+.connection-presets-status {
+  margin: 7px 0 0;
+  color: #a8d0ec;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.provider-address > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.provider-address > button {
+  flex-shrink: 0;
+}
+.custom-provider-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 31;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #00112bdb;
+  backdrop-filter: blur(6px);
+}
+.custom-provider-dialog {
+  width: min(780px, 100%);
+  min-width: 0;
+  max-height: 100%;
+  overflow: auto;
+  padding: 26px;
+  color: #eef8ff;
+  border: 1px solid #88d8ff;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #0a3876, #061d46 62%, #092c5b);
+  box-shadow:
+    0 0 24px #248cff70,
+    0 20px 70px #0009;
+  font-size: 18px;
+}
+.custom-provider-shade .custom-provider-dialog h2 {
+  margin: 5px 0 0;
+  font-size: 30px;
+}
+.custom-provider-dialog .muted {
+  margin: 18px 0;
+  font-size: 16px;
+}
+.custom-provider-dialog > label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 17px;
+}
+.custom-provider-dialog input {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  font-size: 18px;
+}
+.custom-provider-dialog .error-inline {
+  margin-top: 12px;
+  font-size: 16px;
+}
+.custom-provider-dialog .dialog-actions button {
+  min-height: 44px;
+  font-size: 18px;
+  padding: 9px 22px;
+}
+.settings-shade .settings-dialog .form-row {
   display: flex;
   gap: 16px;
 }
-.settings-dialog .form-row > label {
+.settings-shade .settings-dialog .form-row > label {
   flex: 1;
   min-width: 0;
 }
-.settings-dialog .hint {
+.settings-shade .settings-dialog .hint {
   color: #8cb6d4;
-  font-size: 11px;
-  line-height: 1.7;
-  margin: 17px 0;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 12px 0;
 }
-.settings-dialog .dialog-actions {
+.settings-shade .settings-dialog .dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 20px;
+  margin-top: 12px;
+  flex-shrink: 0;
+  border-top: 1px solid #88d8ff33;
+  padding: 10px 0;
+  background: #071f49fa;
+}
+.settings-shade .settings-dialog .dialog-actions button {
+  min-height: 44px;
+  padding: 9px 22px;
+  font-size: 18px;
 }
 @media (max-height: 640px) {
   .feature-dialog {
     max-height: calc(100% - 76px);
   }
-  .settings-dialog {
-    max-height: calc(100% - 76px);
+  .settings-shade .settings-dialog {
+    max-height: 100%;
   }
   .feature-heading {
     padding-top: 12px;
