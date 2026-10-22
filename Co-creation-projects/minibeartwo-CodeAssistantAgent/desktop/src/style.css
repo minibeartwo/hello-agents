@@ -1,7 +1,7 @@
 :root {
   font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
   color: #e7f3ff;
-  background: #08265b;
+  background: transparent;
   font-synthesis: none;
   color-scheme: dark;
   font-size: 13px;
@@ -64,6 +64,11 @@ button:hover:not(:disabled) {
   height: 100vh;
   display: flex;
   flex-direction: column;
+  border-radius: 24px;
+  overflow: hidden;
+}
+html.is-maximized .app-shell {
+  border-radius: 0;
 }
 .primary,
 .secondary {

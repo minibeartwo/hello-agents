@@ -303,9 +303,11 @@ app.whenReady().then(async () => {
       minHeight: 480,
       frame: false,
       thickFrame: false,
+      transparent: true,
+      roundedCorners: true,
       show: false,
       skipTaskbar: true,
-      backgroundColor: '#10151e',
+      backgroundColor: '#00000000',
       title: 'CodeAssistantAgent · 代码助手',
       webPreferences: {
         preload: path.join(__dirname, 'preload.cjs'),

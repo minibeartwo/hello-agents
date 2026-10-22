@@ -1,9 +1,8 @@
-/** Animate the native client without resizing it or recreating its renderer. */
-function createClientTransition({ window, getPositions, reduceMotion, onState }) {
+/** Fade in place; native position changes only happen before the window is shown. */
+function createClientTransition({ window, positionWindow, reduceMotion, onState }) {
   let requested = window.isVisible() && !window.isMinimized();
   let progress = requested ? 1 : 0;
   let opacity = window.getOpacity();
-  let positions = null;
   let timer = null;
 
   function cancel() {
@@ -11,19 +10,9 @@ function createClientTransition({ window, getPositions, reduceMotion, onState })
     timer = null;
   }
 
-  function move(value) {
-    if (!positions || window.isMaximized() || window.isFullScreen()) return;
-    const { start, end } = positions;
-    window.setPosition(
-      Math.round(start.x + (end.x - start.x) * value),
-      Math.round(start.y + (end.y - start.y) * value), false,
-    );
-  }
-
   function paint(value) {
     progress = value;
     window.setOpacity(opacity * value);
-    move(value);
   }
 
   function finish() {
@@ -35,7 +24,6 @@ function createClientTransition({ window, getPositions, reduceMotion, onState })
       window.hide();
       window.setSkipTaskbar(true);
       window.setOpacity(opacity);
-      move(1);
     }
     onState();
   }
@@ -46,17 +34,30 @@ function createClientTransition({ window, getPositions, reduceMotion, onState })
     if (reduceMotion() || Math.abs(target - progress) < 0.001) { finish(); return; }
     const from = progress;
     const began = performance.now();
-    const duration = Math.max(16, (requested ? 220 : 160) * Math.abs(target - from));
+    // Linear opacity makes the appearance gradual instead of front-loading most
+    // of the change. Avoid moving a Windows native window on every timer tick.
+    const duration = Math.max(16, (requested ? 480 : 180) * Math.abs(target - from));
+    const frameDuration = 1000 / 60;
+    let nextFrame = began + frameDuration;
+    const schedule = () => {
+      const now = performance.now();
+      // Account for native API time and Windows timer rounding instead of adding
+      // a fresh 16ms delay after every completed frame. Drop missed frames.
+      if (nextFrame <= now) nextFrame = now + frameDuration;
+      timer = setTimeout(tick, Math.max(1, nextFrame - now));
+    };
     const tick = () => {
       timer = null;
       if (window.isDestroyed()) return;
       const elapsed = Math.min(1, (performance.now() - began) / duration);
-      const eased = 1 - (1 - elapsed) ** 3;
-      paint(from + (target - from) * eased);
+      paint(from + (target - from) * elapsed);
       if (elapsed >= 1) finish();
-      else timer = setTimeout(tick, 16);
+      else {
+        nextFrame += frameDuration;
+        schedule();
+      }
     };
-    timer = setTimeout(tick, 16);
+    schedule();
   }
 
   function show() {
@@ -70,8 +71,7 @@ function createClientTransition({ window, getPositions, reduceMotion, onState })
       progress = 0;
       window.setOpacity(0);
       if (window.isMinimized()) window.restore();
-      positions = getPositions();
-      move(reduceMotion() ? 1 : 0);
+      positionWindow();
     }
     window.setSkipTaskbar(false);
     window.show();
@@ -89,14 +89,8 @@ function createClientTransition({ window, getPositions, reduceMotion, onState })
       progress = 0;
       window.hide();
       window.setSkipTaskbar(true);
+      window.setOpacity(opacity);
       return;
-    }
-    // A manually moved window should fade from its current position.
-    if (timer === null && positions) {
-      const [x, y] = window.getPosition();
-      const dx = positions.start.x - positions.end.x;
-      const dy = positions.start.y - positions.end.y;
-      positions = { end: { x, y }, start: { x: x + dx, y: y + dy } };
     }
     animate();
   }
@@ -112,7 +106,6 @@ function createClientTransition({ window, getPositions, reduceMotion, onState })
       cancel();
       progress = 0;
       window.setOpacity(opacity);
-      move(1);
     }
     onState();
   }
@@ -124,7 +117,7 @@ function createClientTransition({ window, getPositions, reduceMotion, onState })
     window.removeListener('maximize', settle);
     window.removeListener('unmaximize', settle);
     window.removeListener('closed', dispose);
-    if (!window.isDestroyed()) { window.setOpacity(opacity); move(1); }
+    if (!window.isDestroyed()) window.setOpacity(opacity);
   }
 
   window.on('hide', externallyHidden);

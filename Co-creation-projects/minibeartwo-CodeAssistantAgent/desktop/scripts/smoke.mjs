@@ -255,13 +255,22 @@ async function inspectHome(page, application) {
   homeChecks.push('filesystem-backed drop bridge rejects synthetic files');
   await application.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手').show());
+  const restoreSize = await application.evaluate(({ BrowserWindow }) => {
+    const { width, height } = BrowserWindow.getAllWindows()
+      .find((entry) => entry.getTitle() === 'CodeAssistantAgent · 代码助手').getContentBounds();
+    return { width, height };
+  });
   await page.getByRole('button', { name: '最大化或还原', exact: true }).click();
   await page.waitForFunction(({ width, height }) => innerWidth > width || innerHeight > height,
     { width: layout.width, height: layout.height });
   await waitForNativeState(application, 'maximized', true);
   await page.getByRole('button', { name: '最大化或还原', exact: true }).click();
   await waitForNativeState(application, 'maximized', false);
-  await page.waitForFunction(() => Math.abs(innerWidth * 0.65625 - 650) <= 2 && Math.abs(innerHeight * 0.65625 - 500) <= 2);
+  // Compare with the pre-maximize size: Windows rounds transparent-window bounds
+  // again on restore at fractional display scales.
+  await page.waitForFunction(({ width, height }) =>
+    Math.abs(innerWidth * 0.65625 - width) <= 2 && Math.abs(innerHeight * 0.65625 - height) <= 2,
+    restoreSize);
   await page.getByRole('button', { name: '最小化', exact: true }).click();
   await waitForNativeState(application, 'minimized', true);
   await application.evaluate(({ BrowserWindow }) =>

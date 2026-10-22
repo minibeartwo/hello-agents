@@ -118,6 +118,10 @@ export function ClientTitlebar({
 }) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
+    document.documentElement.classList.toggle('is-maximized', maximized);
+    return () => document.documentElement.classList.remove('is-maximized');
+  }, [maximized]);
+  useEffect(() => {
     let active = true;
     const sync = () => {
       if (!window.codeAssistant) return;

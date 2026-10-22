@@ -43,7 +43,7 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
   let disposed = false;
   const clientTransition = createClientTransition({
     window: mainWindow,
-    getPositions: clientPositions,
+    positionWindow: positionClient,
     reduceMotion: () => systemPreferences.getAnimationSettings().prefersReducedMotion,
     onState: notify,
   });
@@ -158,26 +158,6 @@ function createBubble({ mainWindow, userData, hidden, onQuit }) {
     const work = screen.getDisplayMatching(anchor).workArea;
     const next = getClientPosition(anchor, mainWindow.getBounds(), work);
     mainWindow.setPosition(next.x, next.y, false);
-  }
-
-  function clientPositions() {
-    if (bubble.isDestroyed() || mainWindow.isMaximized() || mainWindow.isFullScreen()) return null;
-    const anchor = bubble.getBounds();
-    const bounds = mainWindow.getBounds();
-    const work = screen.getDisplayMatching(anchor).workArea;
-    const end = getClientPosition(anchor, bounds, work);
-    const dx = end.x + bounds.width / 2 - anchor.x - anchor.width / 2;
-    const dy = end.y + bounds.height / 2 - anchor.y - anchor.height / 2;
-    const distance = Math.hypot(dx, dy) || 1;
-    const marginX = work.width >= bounds.width + 16 ? 8 : 0;
-    const marginY = work.height >= bounds.height + 16 ? 8 : 0;
-    const start = {
-      x: Math.max(work.x + marginX, Math.min(Math.round(end.x - 12 * dx / distance),
-        Math.max(work.x + marginX, work.x + work.width - marginX - bounds.width))),
-      y: Math.max(work.y + marginY, Math.min(Math.round(end.y - 12 * dy / distance),
-        Math.max(work.y + marginY, work.y + work.height - marginY - bounds.height))),
-    };
-    return { start, end };
   }
 
   function showClient() {

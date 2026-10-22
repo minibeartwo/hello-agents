@@ -1,4 +1,4 @@
-/** Verify native fade/slide frames and interrupted transitions with a controlled clock. */
+/** Verify gradual opacity, fixed placement and interrupted fades with a controlled clock. */
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
@@ -47,7 +47,7 @@ export async function assertClientTransitions(desktop, checks) {
     });
     const transition = loaded.exports.createClientTransition({
       window,
-      getPositions: () => maximized ? null : { start: { x: 110, y: 205 }, end: { x: 100, y: 200 } },
+      positionWindow: () => { if (!maximized) window.setPosition(100, 200); },
       reduceMotion: () => reduced,
       onState: () => {},
     });
@@ -70,11 +70,13 @@ export async function assertClientTransitions(desktop, checks) {
   assert.equal(opening.window.isVisible(), true, 'show starts immediately with an invisible native window');
   assert.equal(opening.trace.find((frame) => 'shownAtOpacity' in frame).shownAtOpacity, 0,
     'zero opacity is set before show, preventing a one-frame flash');
-  assert.equal(opening.window.bounds.x, 110);
+  assert.equal(opening.window.bounds.x, 100);
   opening.advance(64);
   assert.ok(opening.window.opacity > 0 && opening.window.opacity < 1, 'opening renders intermediate opacity');
-  assert.ok(opening.window.bounds.x >= 100 && opening.window.bounds.x < 110, 'opening moves toward its resting position');
-  opening.advance(200);
+  assert.ok(opening.window.opacity < 0.2, 'entrance reveals gradually instead of appearing almost immediately');
+  opening.advance(176);
+  assert.ok(Math.abs(opening.window.opacity - 0.5) < 0.04, 'halfway through the fade is about half opaque');
+  opening.advance(260);
   assert.equal(opening.window.opacity, 1);
   assert.deepEqual(opening.window.bounds, { x: 100, y: 200, width: 650, height: 500 });
   assert.equal(opening.timers.size, 0);
@@ -90,15 +92,20 @@ export async function assertClientTransitions(desktop, checks) {
   assert.equal(opening.window.opacity, 1, 'hidden window restores its original opacity');
   assert.equal(opening.window.skipTaskbar, true);
   assert.equal(opening.timers.size, 0);
-  checks.push('client fades and slides over visible intermediate frames without resizing or flashing');
+  assert.equal(opening.trace.filter((frame) => 'x' in frame).length, 1,
+    'position is set once before show; opening and closing never move the native window');
+  const showFrame = opening.trace.findIndex((frame) => 'shownAtOpacity' in frame);
+  assert.ok(opening.trace.findIndex((frame) => 'x' in frame) < showFrame,
+    'the final resting position is selected while the window is still invisible');
+  checks.push('client gradually fades in place over 480ms, without per-frame movement, resizing or flashing');
 
   const reversed = fixture();
   reversed.transition.show();
-  reversed.advance(48);
+  reversed.advance(96);
   const beforeHide = reversed.window.opacity;
   reversed.transition.hide();
   assert.equal(reversed.window.opacity, beforeHide, 'reversing to hide does not jump opacity');
-  reversed.advance(16);
+  reversed.advance(20);
   const beforeReopen = reversed.window.opacity;
   assert.ok(beforeReopen < beforeHide);
   const position = reversed.window.getPosition();
@@ -114,7 +121,7 @@ export async function assertClientTransitions(desktop, checks) {
   for (const opacity of [0, 0.4]) {
     const capped = fixture({ opacity });
     capped.transition.show();
-    capped.advance(300);
+    capped.advance(600);
     assert.equal(capped.window.opacity, opacity, 'external opacity settings are preserved');
     capped.transition.hide();
     capped.advance(200);
@@ -129,7 +136,7 @@ export async function assertClientTransitions(desktop, checks) {
   assert.equal(reduced.timers.size, 0);
   const maximized = fixture({ maximized: true });
   maximized.transition.show();
-  maximized.advance(300);
+  maximized.advance(600);
   assert.equal(maximized.trace.some((frame) => 'x' in frame), false, 'maximized windows fade without moving');
   checks.push('client respects reduced motion, maximization, and externally limited native opacity');
 
@@ -156,6 +163,20 @@ export async function assertClientTransitions(desktop, checks) {
   assert.equal(cancelled.timers.size, 0);
   assert.equal(cancelled.window.listenerCount('hide'), 0);
   checks.push('native hide/minimize/dispose settle opacity and leave no animation timers or event handlers');
+
+  const moved = fixture();
+  moved.transition.show();
+  moved.advance(600);
+  moved.window.setPosition(320, 450);
+  const positionCalls = moved.trace.filter((frame) => 'x' in frame).length;
+  moved.transition.hide();
+  moved.advance(240);
+  assert.deepEqual(moved.window.getPosition(), [320, 450], 'closing fades at the user-selected position');
+  assert.equal(moved.trace.filter((frame) => 'x' in frame).length, positionCalls);
+  moved.transition.show();
+  moved.advance(600);
+  assert.deepEqual(moved.window.getPosition(), [100, 200], 'a fresh opening docks beside the mascot again');
+  checks.push('manual window movement is preserved during fade-out and next opening redocks once');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

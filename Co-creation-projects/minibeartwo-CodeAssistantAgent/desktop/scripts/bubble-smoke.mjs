@@ -552,17 +552,27 @@ async function assertNativeClientTransition() {
   }, mainTitle);
   await bubblePage.evaluate(() => window.assistantBubble.toggle());
   await bubblePage.waitForFunction(() => document.getElementById('bubble').getAttribute('aria-expanded') === 'true');
-  await pause(280);
+  await pause(600);
   const opened = await nativeState();
   assert.equal(opened.mainVisible, true);
   assert.equal(opened.mainOpacity, 0, 'animation respects the invisible native QA window');
   assertClientBesideBubble(opened);
   const frames = await application.evaluate(() => global.__clientTransitionFrames);
+  await writeFile(path.join(artifacts, 'client-transition-frames.json'), JSON.stringify(frames, null, 2));
   const moved = frames.filter((frame) => frame.method === 'setPosition');
-  assert.ok(new Set(moved.map((frame) => `${frame.bounds.x},${frame.bounds.y}`)).size >= 3,
-    'the actual native window passes through multiple slide positions');
-  assert.ok(moved.at(-1).at - moved[0].at >= 150, 'the native entrance has visible duration');
-  assert.ok(frames.every((frame) => frame.bounds.width === 650 && frame.bounds.height === 500),
+  assert.equal(moved.length, 1, 'native position is set once before show, with no movement during the fade');
+  assert.ok(frames.indexOf(moved[0]) < frames.findIndex((frame) => frame.method === 'show'),
+    'the client docks beside the mascot before it becomes visible');
+  const opacityFrames = frames.filter((frame) => frame.method === 'setOpacity');
+  assert.ok(opacityFrames.length >= 8, 'the native fade spans multiple opacity updates');
+  assert.ok(opacityFrames.at(-1).at - opacityFrames[0].at >= 450,
+    'the native entrance reveals gradually over about half a second');
+  const shown = frames.findIndex((frame) => frame.method === 'show');
+  assert.ok(frames.slice(shown).filter((frame) => frame.method === 'setOpacity').every((frame) =>
+    frame.bounds.x === frames[shown].bounds.x && frame.bounds.y === frames[shown].bounds.y),
+    'the window stays fixed throughout the native fade');
+  assert.ok(frames.slice(shown).every((frame) =>
+    frame.bounds.width === frames[shown].bounds.width && frame.bounds.height === frames[shown].bounds.height),
     'native animation never resizes or reflows the client');
   await bubblePage.evaluate(() => window.assistantBubble.toggle());
   await bubblePage.waitForFunction(() => document.getElementById('bubble').getAttribute('aria-expanded') === 'false');
@@ -572,13 +582,13 @@ async function assertNativeClientTransition() {
   await bubblePage.evaluate(() => window.assistantBubble.toggle());
   await pause(16);
   await bubblePage.evaluate(() => window.assistantBubble.toggle());
-  await pause(300);
+  await pause(600);
   assert.equal((await nativeState()).mainVisible, true, 'rapid native reopen cannot be hidden by an old timer');
   assertClientBesideBubble(await nativeState());
   await bubblePage.evaluate(() => window.assistantBubble.toggle());
   await eventually(async () => !(await nativeState()).mainVisible, 'transition checks leave the client hidden');
   await writeFile(path.join(artifacts, 'client-transition-frames.json'), JSON.stringify(frames, null, 2));
-  checks.push('real native client transitions include intermediate positions, retain size and opacity limits, and reverse on rapid clicks');
+  checks.push('real native client fades gradually in place, retains size and opacity limits, and reverses on rapid clicks');
 }
 
 try {
