@@ -50,6 +50,10 @@ class Store:
             columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
             if "elapsed" not in columns:
                 db.execute("ALTER TABLE tasks ADD COLUMN elapsed REAL NOT NULL DEFAULT 0")
+            if "skill" not in columns:
+                db.execute("ALTER TABLE tasks ADD COLUMN skill TEXT")
+            if "skill_instructions" not in columns:
+                db.execute("ALTER TABLE tasks ADD COLUMN skill_instructions TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def connect(self):

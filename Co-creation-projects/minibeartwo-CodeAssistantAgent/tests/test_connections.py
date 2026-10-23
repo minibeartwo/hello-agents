@@ -21,7 +21,68 @@ def clean_environment(monkeypatch):
 
 def values(name, key="", **extra):
     return {"name": name, "base_url": "https://provider.example/v1", "model": name + "-model",
-            "api_key": key, "max_steps": 8, "task_timeout": 180, **extra}
+            "api_key": key, "max_steps": 8, **extra}
+
+
+def test_execution_budget_defaults_after_creating_and_deleting_last_connection(tmp_path):
+    settings = Settings(Store(tmp_path / "state.sqlite3"), persist_secrets=False)
+    assert settings.public()["max_steps"] == 1000
+    assert "task_timeout" not in settings.public()
+    saved = settings.save_connection({"model": "default-model", "base_url": "https://provider.example/v1"})
+    assert saved["max_steps"] == 1000 and "task_timeout" not in saved
+    custom = settings.save_connection(values("Custom", id=saved["connection_id"]))
+    assert custom["max_steps"] == 8 and "task_timeout" not in custom
+    cleared = settings.delete_connection(custom["connection_id"])["settings"]
+    assert cleared["max_steps"] == 1000 and "task_timeout" not in cleared
+
+
+@pytest.mark.parametrize("method, route", [("PUT", "/api/settings"), ("POST", "/api/connections")])
+def test_execution_budget_api_defaults_and_limits(tmp_path, method, route):
+    app = create_app(tmp_path, token="budget-token", persist_secrets=False)
+    payload = {"model": "budget-model", "base_url": "https://provider.example/v1"}
+    with TestClient(app, headers={"Authorization": "Bearer budget-token"}) as api:
+        response = api.request(method, route, json=payload)
+        assert response.status_code == 200
+        assert response.json()["max_steps"] == 1000
+        assert "task_timeout" not in response.json()
+        for steps in (101, 1000, 5000, 100000):
+            response = api.request(method, route, json={**payload, "max_steps": steps})
+            assert response.status_code == 200
+            assert response.json()["max_steps"] == steps
+            assert api.get("/api/settings").json()["max_steps"] == steps
+            assert "task_timeout" not in response.json()
+        for invalid in (0, -1, 1.5):
+            assert api.request(method, route, json={**payload, "max_steps": invalid}).status_code == 422
+        assert "maximum" not in api.get("/openapi.json").json()["components"]["schemas"]["ModelSettings"]["properties"]["max_steps"]
+        assert "task_timeout" not in api.get("/api/settings").json()
+        assert "task_timeout" not in api.get("/openapi.json").json()["components"]["schemas"]["ModelSettings"]["properties"]
+
+
+def test_custom_step_budget_above_default_survives_restart_and_activation(tmp_path):
+    store = Store(tmp_path / "state.sqlite3")
+    settings = Settings(store, persist_secrets=False)
+    large = settings.save_connection(values("Large", max_steps=5000))
+    assert large["max_steps"] == 5000
+    small = settings.save_connection(values("Small", max_steps=8))
+    reopened = Settings(store, persist_secrets=False)
+    assert reopened.activate(large["connection_id"])["max_steps"] == 5000
+    assert reopened.activate(small["connection_id"])["max_steps"] == 8
+
+
+def test_legacy_timeout_is_removed_from_saved_profiles_and_not_restored(tmp_path):
+    store = Store(tmp_path / "state.sqlite3")
+    settings = Settings(store, persist_secrets=False)
+    profile = settings.save_connection(values("Legacy"))
+    records = store.settings()["connections"]
+    records[0]["task_timeout"] = 1
+    store.set_settings({"task_timeout": 1, "connections": records})
+    reopened = Settings(store, persist_secrets=False)
+    assert "task_timeout" not in store.settings()
+    assert "task_timeout" not in reopened.connections()["connections"][0]
+    activated = reopened.activate(profile["connection_id"])
+    assert activated["max_steps"] == 8 and activated["model"] == "Legacy-model"
+    assert "task_timeout" not in activated
+    assert "task_timeout" not in store.settings()["connections"][0]
 
 
 def test_save_list_activate_update_and_new_draft_are_independent(tmp_path):

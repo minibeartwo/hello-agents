@@ -117,8 +117,7 @@ export function SettingsDialog({
       model: '',
       has_api_key: false,
       key_storage: 'none',
-      max_steps: 12,
-      task_timeout: 300,
+      max_steps: 1000,
     });
   }
   async function useConnection(id: string) {
@@ -514,32 +513,19 @@ export function SettingsDialog({
               }
             />
           </label>
-          <div className="form-row">
-            <label>
-              每个任务最多调用
-              <input
-                type="number"
-                min="1"
-                max="30"
-                required
-                value={form.max_steps}
-                disabled={busy}
-                onChange={(event) => update('max_steps', Number(event.target.value))}
-              />
-            </label>
-            <label>
-              执行时间上限（秒）
-              <input
-                type="number"
-                min="30"
-                max="1800"
-                required
-                value={form.task_timeout}
-                disabled={busy}
-                onChange={(event) => update('task_timeout', Number(event.target.value))}
-              />
-            </label>
-          </div>
+          <label>
+            单任务最大执行步数
+            <input
+              type="number"
+              min="1"
+              step="1"
+              required
+              value={form.max_steps}
+              disabled={busy}
+              onChange={(event) => update('max_steps', Number(event.target.value))}
+            />
+          </label>
+          <p className="hint">任务不设执行时间上限，仅按步数限额，可随时手动停止。</p>
           <p className="hint">
             {settings.key_storage === 'memory'
               ? '当前密钥仅在本次服务会话中保存，重启后需重新填写。'

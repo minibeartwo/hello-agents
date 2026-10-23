@@ -7,6 +7,7 @@ import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -15,7 +16,7 @@ from pydantic import BaseModel, Field
 from .patches import Patches
 from .models import discover_models, test_connection
 from .runtime import Runtime, TERMINAL
-from .settings import Settings
+from .settings import DEFAULT_MAX_STEPS, Settings
 from .store import Store, identifier
 from .workspace import Conflict, MAX_FILE, Workspace
 
@@ -36,14 +37,14 @@ class NewTask(BaseModel):
     prompt: str = Field(min_length=1, max_length=12000)
     selected_file: str | None = None
     test_argv: list[str] = Field(default_factory=list, max_length=30)
+    skill: Literal["annotate-project-zh"] | None = None
 
 
 class ModelSettings(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     base_url: str = Field(min_length=1, max_length=2000)
     api_key: str = Field(default="", max_length=2000)
-    max_steps: int = Field(default=12, ge=1, le=30)
-    task_timeout: int = Field(default=300, ge=30, le=1800)
+    max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1)
 
 
 class ModelDiscovery(BaseModel):
@@ -79,6 +80,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None, model_fac
     @asynccontextmanager
     async def lifespan(app):
         store.recover()
+        await runtime.resume_annotation_reviews()
         yield
         await runtime.close()
 
@@ -196,7 +198,8 @@ def create_app(data_dir: Path | None = None, token: str | None = None, model_fac
         return [public_task(task) for task in tasks]
 
     def public_task(task):
-        return {key: json.loads(value) if key == "test_argv" else value for key, value in task.items() if key != "messages"}
+        return {key: json.loads(value) if key == "test_argv" else value for key, value in task.items()
+                if key not in {"messages", "skill_instructions"}}
 
     @app.post("/api/tasks", status_code=202)
     async def create_task(values: NewTask):

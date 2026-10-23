@@ -3,7 +3,7 @@ import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { access, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { chooseCustomProvider } from './provider-settings-helpers.mjs';
@@ -18,7 +18,50 @@ const original = (await readFile(path.join(workspace, 'calculator.py'), 'utf8'))
   .replace('return left - right', 'return left + right');
 await writeFile(path.join(workspace, 'calculator.py'), original);
 await writeFile(path.join(workspace, 'notes.md'), '# 项目备注\n');
-const updated = original.replace('    return left + right', '    """返回两个整数之和，保留原有加法逻辑。"""\n    return left + right');
+const originalTests = await readFile(path.join(workspace, 'test_calculator.py'), 'utf8');
+const originalConfig = await readFile(path.join(workspace, 'pytest.ini'), 'utf8');
+const originalEntries = await readdir(workspace);
+const annotationSkill = (await readFile(path.join(root, 'skills/annotate-project-zh/SKILL.md'), 'utf8'))
+  .replace(/\r\n/g, '\n');
+const updated = [
+  '# 代码用途：提供两个整数相加的示例函数，供计算调用和测试验证。',
+  '# 输入文件：无。',
+  '# 输入说明：调用方通过内存传入待相加的两个整数。',
+  '# 输出文件：无。',
+  '# 输出说明：返回两个整数的和，不写入文件。',
+  '',
+].join('\n') + original.replace('def add(', [
+  '# 函数用途：计算两个整数的和，保留原有加法逻辑。',
+  '# 输入说明：left：左侧加数；right：右侧加数，均为调用方传入的整数。',
+  '# 输出说明：返回 left 与 right 相加得到的整数。',
+  'def add(',
+].join('\n'));
+const updatedTests = [
+  '# 代码用途：使用 pytest（自动发现并运行断言的 Python 测试框架）检查加法函数的正数和负数输入。',
+  '# 输入文件：无。',
+  '# 输入说明：使用代码中的整数样例调用内存中的 add 函数。',
+  '# 输出文件：无。',
+  '# 输出说明：断言不符合预期时抛出异常，供外部测试框架报告结果。',
+  '',
+].join('\n') + originalTests.replace('def test_add_positive(', [
+  '# 函数用途：检查两个正整数的加法结果。',
+  '# 输入说明：无。',
+  '# 输出说明：返回 None；结果不等于 5 时触发断言异常。',
+  'def test_add_positive(',
+].join('\n')).replace('def test_add_negative(', [
+  '# 函数用途：检查两个负整数的加法结果。',
+  '# 输入说明：无。',
+  '# 输出说明：返回 None；结果不等于 -5 时触发断言异常。',
+  'def test_add_negative(',
+].join('\n'));
+const updatedConfig = [
+  '# 代码用途：限定 pytest（自动发现并运行断言的 Python 测试框架）的样例测试搜索范围。',
+  '# 输入文件：运行时确定（由测试启动目录决定当前目录中的 test_calculator.py）。',
+  '# 输入说明：testpaths 指定搜索当前目录，python_files 指定测试文件名。',
+  '# 输出文件：无。',
+  '# 输出说明：为外部测试框架提供文件发现规则，本配置不执行测试或写入文件。',
+  '',
+].join('\n') + originalConfig;
 const documentation = '# 项目说明\n\n本项目提供整数加法函数 `add(left, right)`。\n\n运行测试：`python -m pytest -q`。\n';
 let modelCalls = 0;
 let discoveryMode = 'ok';
@@ -42,7 +85,10 @@ const provider = createServer(async (request, response) => {
     const input = JSON.parse(body);
     requests.push(input);
     const actions = [
+      { action: 'inventory', args: { offset: 0 }, summary: '建立完整项目文件清单，保留测试与配置范围。' },
       { action: 'read', args: { path: 'calculator.py' }, summary: '读取加法函数与文件版本。' },
+      { action: 'read', args: { path: 'test_calculator.py' }, summary: '读取全部测试函数，建立函数清单。' },
+      { action: 'read', args: { path: 'pytest.ini' }, summary: '读取测试发现配置，确认参数与实际用途。' },
       {
         action: 'propose_patch',
         args: {
@@ -52,18 +98,27 @@ const provider = createServer(async (request, response) => {
               base_hash: createHash('sha256').update(original).digest('hex'),
               content: updated,
             },
+            {
+              path: 'test_calculator.py',
+              base_hash: createHash('sha256').update(originalTests).digest('hex'),
+              content: updatedTests,
+            },
+            {
+              path: 'pytest.ini',
+              base_hash: createHash('sha256').update(originalConfig).digest('hex'),
+              content: updatedConfig,
+            },
           ],
         },
-        summary: '为加法函数添加中文说明，保留计算逻辑，准备审阅。',
+        summary: '为完整示例源码、测试与配置添加中文说明，保留原有逻辑，准备审阅。',
       },
-      { action: 'test', args: {}, summary: '运行当前任务授权的 pytest 测试。' },
       {
         action: 'final',
         args: {
           message:
-            '已为 calculator.py 的加法函数添加中文注释并保留原有逻辑。测试结果见运行输出。',
+            '已处理 3 个文件、3 个函数，保留原有逻辑并通过 Python 静态注释检查；跳过 Markdown 文档，未执行项目或测试。',
         },
-        summary: '整理修改与验证结果。',
+        summary: '整理文件与函数覆盖数量、跳过项及静态检查结果。',
       },
       { action: 'read', args: { path: 'calculator.py' }, summary: '读取项目入口，依据实际代码整理说明。' },
       {
@@ -78,12 +133,21 @@ const provider = createServer(async (request, response) => {
       },
     ];
     const output = JSON.stringify(actions[modelCalls++] || actions.at(-1));
+    assert.equal(input.tools[0].function.name, 'submit_action');
+    assert.equal(input.tool_choice.function.name, 'submit_action');
     response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
     for (let offset = 0; offset < output.length; offset += 50) {
+      const part = { index: 0, function: { arguments: output.slice(offset, offset + 50) } };
+      if (offset === 0) {
+        part.id = `smoke-call-${modelCalls}`;
+        part.type = 'function';
+        part.function.name = 'submit_action';
+      }
       response.write(
-        `data: ${JSON.stringify({ id: 'local-smoke', object: 'chat.completion.chunk', created: 0, model: input.model, choices: [{ index: 0, delta: { content: output.slice(offset, offset + 50) }, finish_reason: null }] })}\n\n`,
+        `data: ${JSON.stringify({ id: 'local-smoke', object: 'chat.completion.chunk', created: 0, model: input.model, choices: [{ index: 0, delta: { content: '<result>ignored simulated observation</result>', tool_calls: [part] }, finish_reason: null }] })}\n\n`,
       );
     }
+    response.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
     response.end('data: [DONE]\n\n');
   } catch (error) {
     response.writeHead(500);
@@ -687,6 +751,9 @@ try {
   await page.getByRole('dialog', { name: '代码注释', exact: true }).waitFor();
   await assertNoLegacyInterface(page);
   assert.match(await page.getByRole('textbox', { name: '任务需求', exact: true }).inputValue(), /中文.*注释|注释/);
+  assert.equal(await page.getByRole('checkbox', { name: '允许此任务运行测试', exact: true }).count(), 0,
+    'the annotation skill offers no authorization to execute the target project');
+  assert.equal(await page.getByRole('textbox', { name: '授权测试命令', exact: true }).count(), 0);
   assert.equal(modelCalls, 0, 'choosing an action prepares the task without sending it');
   homeChecks.push('native folder drop opens the Chinese annotation dialog without a legacy workbench');
   await page.getByRole('textbox', { name: '任务需求', exact: true }).fill('保留这份未发送的任务草稿。');
@@ -716,30 +783,54 @@ try {
   await inspectSavedConnections(page, app);
   await page
     .getByRole('textbox', { name: '任务需求', exact: true })
-    .fill('为 add 函数添加清晰的中文注释，保留原有计算逻辑，并运行测试验证。');
-  await page.getByRole('checkbox', { name: '允许此任务运行测试', exact: true }).check();
-  await page.getByRole('textbox', { name: '授权测试命令', exact: true }).fill('python -m pytest -q');
+    .fill('按绑定技能为完整项目添加五项文件头和逐函数三项中文注释，保留原有逻辑，仅静态检查。');
+  assert.equal(await page.getByRole('checkbox', { name: '允许此任务运行测试', exact: true }).count(), 0);
   await page.getByRole('button', { name: '开始注释', exact: true }).click();
-  await page.getByRole('button', { name: '接受并应用', exact: true }).waitFor({ timeout: 60000 });
-  assert.equal(await readFile(path.join(workspace, 'calculator.py'), 'utf8'), original);
+  await page.locator('.task-status.completed').waitFor({ timeout: 60000 });
+  assert.equal(await page.getByRole('button', { name: '接受并应用', exact: true }).count(), 0);
   assert.match(await page.locator('.patch-review').innerText(), /calculator\.py|中文/);
   await assertNoLegacyInterface(page);
-  await page.getByRole('button', { name: '接受并应用', exact: true }).click();
-  await page.locator('.task-status.completed').waitFor({ timeout: 60000 });
   assert.equal(await readFile(path.join(workspace, 'calculator.py'), 'utf8'), updated);
-  assert.match(await page.getByLabel('运行输出', { exact: true }).innerText(), /2 passed/);
+  assert.equal(await readFile(path.join(workspace, 'test_calculator.py'), 'utf8'), updatedTests);
+  assert.equal(await readFile(path.join(workspace, 'pytest.ini'), 'utf8'), updatedConfig);
+  assert.deepEqual(await readdir(workspace), originalEntries,
+    'annotation modifies existing project files without generating reports or execution artifacts');
+  assert.equal(await page.getByLabel('运行输出', { exact: true }).count(), 0,
+    'the annotation task does not run the target project or pytest');
   const annotationTaskId = await page.getByRole('combobox', { name: '历史任务', exact: true }).inputValue();
   assert.ok(annotationTaskId, 'the annotation task is available in persisted history');
   const savedTask = await page.evaluate((id) => window.codeAssistant.request('GET', `/api/tasks/${id}`), annotationTaskId);
-  assert.equal(savedTask.selected_file, 'calculator.py', 'a dropped code file remains the selected task context');
-  assert.equal(modelCalls, 4);
+  assert.equal(savedTask.skill, 'annotate-project-zh', 'the annotation button creates a skill-bound task');
+  assert.equal(savedTask.selected_file, null, 'a single-file drop must not narrow the annotation scope');
+  assert.deepEqual(savedTask.test_argv, [], 'skill-bound tasks never authorize project execution');
+  assert.equal(savedTask.patches[0].changes.length, 3, 'the annotation includes project tests and configuration');
+  assert.equal(modelCalls, 6);
   assert.equal(requests[0].stream, true);
+  assert.ok(requests[1].messages.some((entry) => entry.role === 'tool' && entry.tool_call_id === 'smoke-call-1'),
+    'real observations use the original native call ID');
+  assert.ok(!JSON.stringify(requests).includes('ignored simulated observation'),
+    'model-generated tool observations never enter conversation evidence');
+  for (const request of requests) {
+    const system = request.messages.find((message) => message.role === 'system').content;
+    assert.ok(system.includes(annotationSkill), 'every model step receives the full bundled skill');
+    assert.match(system, /函数用途、输入说明、输出说明/);
+    assert.match(system, /完整项目/);
+    assert.doesNotMatch(system, /test: \{\}/, 'the annotation model is not offered a test action');
+    const context = JSON.parse(request.messages[1].content);
+    assert.equal(context.skill, 'annotate-project-zh');
+    assert.equal(context.selected_file, null);
+    assert.deepEqual(context.authorized_test, []);
+    assert.equal(path.resolve(context.workspace_root), workspace,
+      'the pinned context identifies the full imported workspace');
+  }
   await nativeScreenshot(app, 'annotation-native.png');
-  homeChecks.push('annotation uses local HelloAgents SSE, reviews a logic-preserving Chinese comment, and runs real pytest');
+  homeChecks.push('annotation automatically applies validated source, function and configuration comments with Diff and undo records');
   await page.getByRole('button', { name: '撤销此补丁', exact: true }).click();
   await page.locator('.patch-status').filter({ hasText: '已撤销' }).waitFor();
   assert.equal(await readFile(path.join(workspace, 'calculator.py'), 'utf8'), original);
-  homeChecks.push('annotation undo restores the original source file');
+  assert.equal(await readFile(path.join(workspace, 'test_calculator.py'), 'utf8'), originalTests);
+  assert.equal(await readFile(path.join(workspace, 'pytest.ini'), 'utf8'), originalConfig);
+  homeChecks.push('annotation undo restores all original project source, tests and configuration');
   await page.getByRole('button', { name: '关闭任务面板', exact: true }).click();
   await page.locator('.home-action-analysis').click();
   await page.getByRole('dialog', { name: '项目解析', exact: true }).waitFor();
@@ -757,7 +848,12 @@ try {
   assert.equal(await readFile(path.join(workspace, 'PROJECT.md'), 'utf8'), documentation);
   const analysisTaskId = await page.getByRole('combobox', { name: '历史任务', exact: true }).inputValue();
   assert.ok(analysisTaskId && analysisTaskId !== annotationTaskId);
-  assert.equal(modelCalls, 7);
+  const analysisTask = await page.evaluate((id) => window.codeAssistant.request('GET', `/api/tasks/${id}`), analysisTaskId);
+  assert.equal(analysisTask.skill, null, 'project analysis remains a normal document-producing task');
+  assert.deepEqual(analysisTask.test_argv, []);
+  assert.equal(modelCalls, 9);
+  assert.ok(!requests[6].messages.find((message) => message.role === 'system').content.includes(annotationSkill),
+    'documentation is not subject to the annotation-only skill');
   await nativeScreenshot(app, 'analysis-native.png');
   homeChecks.push('project analysis creates an actual project document only after review');
   await page.getByRole('button', { name: '关闭任务面板', exact: true }).click();
@@ -770,7 +866,7 @@ try {
   assert.equal(await page.getByRole('textbox', { name: '任务需求', exact: true }).isEditable(), true);
   assert.equal(await page.getByRole('combobox', { name: '历史任务', exact: true }).locator('option').count(), 3,
     'importing a file keeps both previous tasks in history');
-  assert.equal(modelCalls, 7, 'importing another file does not send a new model request');
+  assert.equal(modelCalls, 9, 'importing another file does not send a new model request');
   await assertNoLegacyInterface(page);
   homeChecks.push('importing another file in the same project clears the active result and retains task history');
   await app.close();
@@ -789,6 +885,11 @@ try {
   await page.getByRole('combobox', { name: '历史任务', exact: true }).selectOption(annotationTaskId);
   await page.locator('.task-status.completed').waitFor();
   assert.match(await page.locator('.patch-status').innerText(), /已撤销/);
+  const restoredAnnotationTask = await page.evaluate((id) => window.codeAssistant.request('GET', `/api/tasks/${id}`), annotationTaskId);
+  assert.equal(restoredAnnotationTask.skill, 'annotate-project-zh', 'the skill binding survives application restart');
+  assert.equal(restoredAnnotationTask.selected_file, null);
+  assert.deepEqual(restoredAnnotationTask.test_argv, []);
+  assert.equal(await page.getByRole('checkbox', { name: '允许此任务运行测试', exact: true }).count(), 0);
   await page.getByRole('combobox', { name: '历史任务', exact: true }).selectOption(analysisTaskId);
   await page.getByRole('dialog', { name: '项目解析', exact: true }).waitFor();
   await page.locator('.task-status.completed').waitFor();

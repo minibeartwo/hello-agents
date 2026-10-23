@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { HomeAction } from './ClientHome';
 import type { ModelSettings, Task, TaskEvent, Workspace } from './types';
 import './feature-dialog.css';
@@ -150,6 +150,18 @@ export function FeatureDialog(props: FeatureDialogProps) {
   const dialog = useDialogFocus<HTMLDivElement>(onClose);
   const title = action === 'comment' ? '代码注释' : '项目解析';
   const locked = busy || sending || operationPending;
+  const annotationSkill = action === 'comment' && (!task || task.skill === 'annotate-project-zh');
+  const progressList = useRef<HTMLOListElement>(null);
+  const followProgress = useRef(true);
+  useLayoutEffect(() => {
+    followProgress.current = true;
+    const list = progressList.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [task?.id]);
+  useLayoutEffect(() => {
+    const list = progressList.current;
+    if (list && followProgress.current) list.scrollTop = list.scrollHeight;
+  }, [activity.length]);
   return (
     <div className="modal-shade feature-shade">
       <div
@@ -178,7 +190,24 @@ export function FeatureDialog(props: FeatureDialogProps) {
           <div className="feature-context">
             <div className="feature-project" title={workspace.root}>
               <strong>{workspace.name}</strong>
-              <span>{selectedFile ? `当前文件：${selectedFile}` : '使用整个项目上下文'}</span>
+              <span>
+                {annotationSkill
+                  ? '注释范围：整个项目的自有源码'
+                  : selectedFile
+                    ? `当前文件：${selectedFile}`
+                    : '使用整个项目上下文'}
+              </span>
+              {annotationSkill && (
+                <span role="note">
+                  请求超时会持续重试，等待不消耗步数且不受任务总时限中止，可随时停止当前任务。
+                </span>
+              )}
+              {annotationSkill && (
+                <span role="note">
+                  按 annotate-project-zh
+                  添加文件头与逐函数注释，校验后自动应用；保留 Diff 和撤销记录，不运行项目。
+                </span>
+              )}
             </div>
             <button
               type="button"
@@ -229,29 +258,33 @@ export function FeatureDialog(props: FeatureDialogProps) {
               onChange={(event) => onPromptChange(event.target.value)}
               disabled={locked || !!task}
               placeholder={
-                action === 'comment' ? '说明需要注释的范围和要求…' : '说明项目文档需要包含的内容…'
+                action === 'comment' ? '补充整个项目的注释要求…' : '说明项目文档需要包含的内容…'
               }
             />
             {!task && (
               <>
-                <label className="feature-test-toggle">
-                  <input
-                    type="checkbox"
-                    checked={testEnabled}
-                    onChange={(event) => onTestsChange(event.target.checked)}
-                    disabled={locked}
-                  />
-                  允许此任务运行测试
-                </label>
-                {testEnabled && (
-                  <input
-                    className="feature-test-command"
-                    aria-label="授权测试命令"
-                    value={testCommand}
-                    onChange={(event) => onTestCommandChange(event.target.value)}
-                    disabled={locked}
-                    spellCheck={false}
-                  />
+                {action === 'analysis' && (
+                  <>
+                    <label className="feature-test-toggle">
+                      <input
+                        type="checkbox"
+                        checked={testEnabled}
+                        onChange={(event) => onTestsChange(event.target.checked)}
+                        disabled={locked}
+                      />
+                      允许此任务运行测试
+                    </label>
+                    {testEnabled && (
+                      <input
+                        className="feature-test-command"
+                        aria-label="授权测试命令"
+                        value={testCommand}
+                        onChange={(event) => onTestCommandChange(event.target.value)}
+                        disabled={locked}
+                        spellCheck={false}
+                      />
+                    )}
+                  </>
                 )}
                 <div className="feature-start-row">
                   <span>
@@ -283,7 +316,7 @@ export function FeatureDialog(props: FeatureDialogProps) {
                   {statusLabels[task.status] || task.status}
                 </span>
                 <span className="feature-step-count">
-                  {task.steps} / {settings?.max_steps || 12} 步
+                  {task.steps} / {settings?.max_steps || 1000} 步
                 </span>
                 {busy && (
                   <button
@@ -297,13 +330,22 @@ export function FeatureDialog(props: FeatureDialogProps) {
                 )}
               </div>
               {activity.length > 0 && (
-                <ol className="feature-activity">
+                <ol
+                  ref={progressList}
+                  className="feature-activity"
+                  aria-label="处理进度记录"
+                  tabIndex={0}
+                  onScroll={(event) => {
+                    const list = event.currentTarget;
+                    followProgress.current =
+                      list.scrollHeight - list.scrollTop - list.clientHeight < 24;
+                  }}
+                >
                   {activity
                     .filter(
                       (event) =>
                         !['model.delta', 'command.output', 'task.queued'].includes(event.kind),
                     )
-                    .slice(-10)
                     .map((event, index) => (
                       <li
                         key={event.id ?? `${event.kind}-${index}`}
@@ -328,7 +370,7 @@ export function FeatureDialog(props: FeatureDialogProps) {
               aria-label={`修改审阅 ${patchIndex + 1}`}
             >
               <div className="feature-section-title">
-                <h3>修改审阅 · {patch.changes.length} 个文件</h3>
+                <h3>{task.skill === 'annotate-project-zh' ? '注释修改记录' : '修改审阅'} · {patch.changes.length} 个文件</h3>
                 <span className={`patch-status ${patch.status}`}>
                   {patchLabels[patch.status] || patch.status}
                 </span>

@@ -25,6 +25,7 @@ export interface Task {
   id: string;
   session_id: string;
   prompt: string;
+  skill?: 'annotate-project-zh' | null;
   status: string;
   result: string;
   steps: number;
@@ -40,7 +41,6 @@ export interface ModelSettings {
   has_api_key: boolean;
   key_storage: string;
   max_steps: number;
-  task_timeout: number;
 }
 export interface SavedConnection extends Omit<ModelSettings, 'connection_id' | 'connection_name'> {
   id: string;

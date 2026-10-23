@@ -289,6 +289,24 @@ def test_settings_never_store_key_in_sqlite(tmp_path, headers):
         assert "api_key" not in app.state.store.settings()
 
 
+def test_analysis_ignores_legacy_wall_time_limit_and_keeps_step_budget(tmp_path, headers):
+    class SlowModel:
+        async def generate(self, messages, emit):
+            await asyncio.sleep(.05)
+            return action("final", message="不限任务时长，解析已完成。")
+
+        def close(self):
+            pass
+
+    app = create_app(tmp_path / "data", token="test-token", model_factory=SlowModel, persist_secrets=False)
+    app.state.store.set_settings({"task_timeout": .001, "max_steps": 1})
+    with TestClient(app, headers=headers) as client:
+        _, workspace_id = open_workspace(client, tmp_path)
+        created = client.post("/api/tasks", json={"workspace_id": workspace_id, "prompt": "解析项目"}).json()
+        complete = wait_task(client, created["id"], "completed")
+        assert complete["steps"] == 1 and complete["elapsed"] >= .05
+
+
 async def test_real_command_timeout_and_cancellation_stop_process(tmp_path):
     (tmp_path / "test_sleep.py").write_text("import os, time\nfrom pathlib import Path\ndef test_sleep():\n    Path('pid.txt').write_text(str(os.getpid()))\n    time.sleep(30)\n", encoding="utf-8")
 

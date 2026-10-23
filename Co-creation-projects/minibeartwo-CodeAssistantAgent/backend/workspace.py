@@ -23,8 +23,10 @@ class Conflict(ValueError):
 
 
 class Workspace:
-    def __init__(self, root: str):
+    def __init__(self, root: str, include_build_sources: bool = False):
         self.root = Path(root).expanduser().resolve(strict=True)
+        # Annotation must inspect content before calling build/dist generated.
+        self.excluded = EXCLUDED - {"build", "dist"} if include_build_sources else EXCLUDED
         if not self.root.is_dir():
             raise ValueError("请选择有效的项目文件夹。")
 
@@ -35,7 +37,7 @@ class Workspace:
         if not path.is_relative_to(self.root) or path == self.root:
             raise ValueError("路径超出工作区。")
         parts = path.relative_to(self.root).parts
-        if any(part.casefold() in EXCLUDED for part in parts):
+        if any(part.casefold() in self.excluded for part in parts):
             raise ValueError("该目录不在可访问范围内。")
         name = path.name.casefold()
         if (name == ".env" or name.startswith(".env.")) and name != ".env.example":
@@ -65,7 +67,7 @@ class Workspace:
             raise ValueError("目录不存在。")
         entries = []
         for item in sorted(parent.iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold())):
-            if item.name.casefold() in EXCLUDED or item.is_symlink():
+            if item.name.casefold() in self.excluded or item.is_symlink():
                 continue
             rel = item.relative_to(self.root).as_posix()
             try:
@@ -77,10 +79,10 @@ class Workspace:
                 break
         return entries
 
-    def files(self, limit: int = 800):
+    def files(self, limit: int | None = 800):
         count = 0
         for directory, names, files in os.walk(self.root, followlinks=False):
-            names[:] = sorted(n for n in names if n.casefold() not in EXCLUDED and not (Path(directory) / n).is_symlink())
+            names[:] = sorted(n for n in names if n.casefold() not in self.excluded and not (Path(directory) / n).is_symlink())
             for name in sorted(files):
                 path = Path(directory) / name
                 if path.is_symlink():
@@ -92,7 +94,7 @@ class Workspace:
                     continue
                 yield relative
                 count += 1
-                if count >= limit:
+                if limit is not None and count >= limit:
                     return
 
     def search(self, query: str) -> list[dict]:

@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 from .store import Store, identifier
 
+DEFAULT_MAX_STEPS = 1000
+
 
 class Settings:
     def __init__(self, store: Store, persist_secrets: bool = True):
@@ -19,6 +21,14 @@ class Settings:
                 self.keyring = keyring
             except Exception:
                 pass
+        saved = store.settings()
+        # Retired wall-clock limits must not survive profile selection or restart.
+        if "task_timeout" in saved:
+            store.execute("DELETE FROM settings WHERE key=?", ("task_timeout",))
+        if any("task_timeout" in record for record in saved.get("connections", [])):
+            records = [{key: value for key, value in record.items() if key != "task_timeout"}
+                       for record in saved["connections"]]
+            store.set_settings({"connections": records})
         saved = store.settings()
         if "connections" not in saved:
             # Import the previous single connection once, including its existing secret.
@@ -49,7 +59,7 @@ class Settings:
 
     @staticmethod
     def _fields(values: dict) -> dict:
-        return {key: values[key] for key in ("model", "base_url", "max_steps", "task_timeout")}
+        return {key: values[key] for key in ("model", "base_url", "max_steps")}
 
     def _records(self) -> list[dict]:
         return self.store.settings().get("connections", [])
@@ -102,7 +112,7 @@ class Settings:
                      if item["id"] == connection_id), "")
         return {"model": saved.get("model", os.getenv("LLM_MODEL_ID", "")),
                 "base_url": saved.get("base_url", os.getenv("LLM_BASE_URL", "")),
-                "max_steps": saved.get("max_steps", 12), "task_timeout": saved.get("task_timeout", 300),
+                "max_steps": saved.get("max_steps", DEFAULT_MAX_STEPS),
                 "has_api_key": bool(self.memory_key), "key_storage": self.storage,
                 "connection_id": connection_id, "connection_name": name}
 
@@ -135,7 +145,7 @@ class Settings:
         if saved.get("active_connection_id") == connection_id:
             replacement = records[0] if records else None
             changes.update(self._fields(replacement) if replacement else {
-                "model": "", "base_url": "", "max_steps": 12, "task_timeout": 300})
+                "model": "", "base_url": "", "max_steps": DEFAULT_MAX_STEPS})
             changes["active_connection_id"] = replacement["id"] if replacement else None
         self.store.set_settings(changes)
         self._clear_key(connection_id)
@@ -154,8 +164,7 @@ class Settings:
         connection_id = values.get("id") or identifier()
         existing = self._record(connection_id) if values.get("id") else None
         fields = {"model": values["model"].strip(), "base_url": endpoint,
-                  "max_steps": max(1, min(int(values.get("max_steps", 12)), 30)),
-                  "task_timeout": max(30, min(int(values.get("task_timeout", 300)), 1800))}
+                  "max_steps": max(1, int(values.get("max_steps", DEFAULT_MAX_STEPS)))}
         name = values.get("name", "").strip() or (existing["name"] if existing else "")
         record = {"id": connection_id, "name": name or (parsed.hostname + " / " + fields["model"])[:100], **fields}
         key = values.get("api_key", "").strip()

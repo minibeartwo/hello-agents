@@ -16,7 +16,7 @@ const terminal = new Set([
 const activeWorkspaceKey = 'code-assistant.active-workspace';
 const presets: Record<HomeAction, string> = {
   comment:
-    '【代码注释】请为当前项目代码添加清晰、准确的中文注释，说明文件职责、函数用途、参数与返回值，并解释必要的专业术语。保留现有代码逻辑与项目结构，避免重复或无意义的注释。先阅读项目，提出修改供我审阅。',
+    '【代码注释】请按 annotate-project-zh 技能为整个项目的自有源码添加中文注释：每个文件使用“代码用途、输入文件、输入说明、输出文件、输出说明”五项文件头；每个函数使用“函数用途、输入说明、输出说明”三项注释，解释全部参数与必要专业术语。只修改源码注释，保持代码行为和现有字符串不变，不执行项目或测试，不生成额外交付文件；先展示修改供我审阅。',
   analysis:
     '【项目解析】请解析当前项目，梳理项目用途、目录结构、技术栈、主要模块与调用关系、安装配置和运行方式，生成清晰的中文项目说明文档。以实际代码为依据；需要补充文档文件时，先提出修改供我审阅。',
 };
@@ -28,7 +28,11 @@ const message = (error: unknown) =>
     '',
   );
 const modeFor = (task: Task): HomeAction =>
-  /【项目解析】|项目说明文档|解析当前项目/.test(task.prompt) ? 'analysis' : 'comment';
+  task.skill === 'annotate-project-zh'
+    ? 'comment'
+    : /【项目解析】|项目说明文档|解析当前项目/.test(task.prompt)
+      ? 'analysis'
+      : 'comment';
 
 async function projectTasks(workspaceId: string) {
   const sessions = await call<Session[]>('GET', `/api/sessions?workspace_id=${workspaceId}`);
@@ -158,7 +162,7 @@ export function App() {
         setLogs((previous) => (previous + (event.data.text || '')).slice(-200000));
         return;
       }
-      setActivity((previous) => [...previous.slice(-39), event]);
+      setActivity((previous) => [...previous, event]);
       if (event.kind === 'agent.step' && taskRef.current?.id === id)
         selectTask({ ...taskRef.current, steps: event.data.step || 0 });
       if (
@@ -271,8 +275,12 @@ export function App() {
           .startsWith(action === 'comment' ? '【代码注释】' : '【项目解析】')
           ? drafts[action].trim()
           : `${action === 'comment' ? '【代码注释】' : '【项目解析】'}\n${drafts[action].trim()}`,
-        selected_file: selectedFile,
-        test_argv: testEnabled ? testCommand.trim().split(/\s+/).filter(Boolean) : [],
+        skill: action === 'comment' ? 'annotate-project-zh' : null,
+        selected_file: action === 'comment' ? null : selectedFile,
+        test_argv:
+          action === 'analysis' && testEnabled
+            ? testCommand.trim().split(/\s+/).filter(Boolean)
+            : [],
       });
       selectTask(created);
       setTasks((previous) => [created, ...previous.filter((item) => item.id !== created.id)]);
