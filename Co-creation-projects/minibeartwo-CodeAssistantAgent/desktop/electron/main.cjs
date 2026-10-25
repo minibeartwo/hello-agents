@@ -80,8 +80,8 @@ function allowed(method, route) {
       `tasks/${id}`,
     ],
     PUT: ['settings'],
-    DELETE: [`connections/${id}`],
-    POST: ['models', 'connection-test', 'connections', `connections/${id}/activate`, 'tasks', `tasks/${id}/cancel`, `patches/${id}/(review|undo)`],
+    DELETE: [`connections/${id}`, `tasks/${id}`],
+    POST: ['models', 'connection-test', 'connections', `connections/${id}/activate`, 'tasks', `tasks/${id}/(cancel|resume)`, `patches/${id}/(review|undo)`],
   };
   return (routes[method] || []).some((pattern) => new RegExp(`^/api/${pattern}$`).test(pathname));
 }
@@ -265,7 +265,13 @@ function registerHandlers() {
       JSON.stringify(request.body || '').length > 1_000_000
     )
       throw new Error('此请求不在客户端接口范围内。');
-    return api(request.method, request.path, request.body);
+    const result = await api(request.method, request.path, request.body);
+    if (request.method === 'DELETE' && /^\/api\/tasks\/[a-f0-9]{32}$/.test(request.path)) {
+      const taskId = request.path.split('/').at(-1);
+      subscriptions.get(taskId)?.abort();
+      subscriptions.delete(taskId);
+    }
+    return result;
   });
   ipcMain.handle('assistant:watch', (event, { taskId, after }) => {
     trust(event);

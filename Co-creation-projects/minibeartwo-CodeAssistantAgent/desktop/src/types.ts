@@ -14,6 +14,8 @@ export interface Change {
   before: string | null;
   after: string | null;
   diff: string;
+  encoding?: 'base64';
+  mime_type?: 'image/png';
 }
 export interface Patch {
   id: string;
@@ -25,7 +27,7 @@ export interface Task {
   id: string;
   session_id: string;
   prompt: string;
-  skill?: 'annotate-project-zh' | null;
+  skill?: 'annotate-project-zh' | 'analyze-project-zh' | null;
   status: string;
   result: string;
   steps: number;

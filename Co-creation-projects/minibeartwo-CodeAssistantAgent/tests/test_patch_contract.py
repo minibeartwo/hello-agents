@@ -145,7 +145,10 @@ async def test_annotation_read_delivers_position_hints_with_real_content_and_has
         assert observation['path'] == 'backend/run.py'
         assert observation['content'] == BEFORE
         assert observation['hash'] == digest(BEFORE)
-        assert observation['annotation_format'] == annotation_read_hints('backend/run.py', BEFORE)
+        expected_hints = annotation_read_hints('backend/run.py', BEFORE)
+        assert {key: observation['annotation_format'][key] for key in expected_hints} == expected_hints
+        assert observation['annotation_format']['positions_truncated'] is False
+        assert observation['start_line'] == 1 and observation['next_start_line'] is None
         assert store.rows('SELECT id FROM patches') == []
         assert source.read_bytes() == BEFORE.encode('utf-8')
     finally:

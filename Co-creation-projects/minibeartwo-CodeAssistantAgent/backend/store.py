@@ -46,6 +46,13 @@ class Store:
                   status TEXT NOT NULL, changes TEXT NOT NULL, created_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS settings (
                   key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS annotation_progress (
+                  task_id TEXT PRIMARY KEY, state TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS annotation_drafts (
+                  task_id TEXT NOT NULL, path TEXT NOT NULL, base_hash TEXT NOT NULL,
+                  state TEXT NOT NULL, PRIMARY KEY(task_id,path));
+                CREATE TABLE IF NOT EXISTS annotation_draft_owners (
+                  task_id TEXT PRIMARY KEY, owner TEXT NOT NULL);
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
             if "elapsed" not in columns:
@@ -94,6 +101,21 @@ class Store:
             "UPDATE tasks SET " + ",".join(f"{key}=?" for key in values) + " WHERE id=?",
             (*values.values(), task_id),
         )
+
+    def delete_task(self, task_id: str):
+        """Delete a task and its records atomically, without touching files."""
+        with self.connect() as db:
+            task = db.execute("SELECT session_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if task is None:
+                raise LookupError("tasks record not found")
+            db.execute("DELETE FROM events WHERE task_id=?", (task_id,))
+            db.execute("DELETE FROM patches WHERE task_id=?", (task_id,))
+            db.execute("DELETE FROM annotation_progress WHERE task_id=?", (task_id,))
+            db.execute("DELETE FROM annotation_drafts WHERE task_id=?", (task_id,))
+            db.execute("DELETE FROM annotation_draft_owners WHERE task_id=?", (task_id,))
+            db.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+            db.execute("DELETE FROM sessions WHERE id=? AND NOT EXISTS (SELECT 1 FROM tasks WHERE session_id=?)",
+                       (task["session_id"], task["session_id"]))
 
     def event(self, task_id: str, kind: str, data: dict) -> dict:
         created = now()

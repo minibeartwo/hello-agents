@@ -16,9 +16,9 @@ const terminal = new Set([
 const activeWorkspaceKey = 'code-assistant.active-workspace';
 const presets: Record<HomeAction, string> = {
   comment:
-    '【代码注释】请按 annotate-project-zh 技能为整个项目的自有源码添加中文注释：每个文件使用“代码用途、输入文件、输入说明、输出文件、输出说明”五项文件头；每个函数使用“函数用途、输入说明、输出说明”三项注释，解释全部参数与必要专业术语。只修改源码注释，保持代码行为和现有字符串不变，不执行项目或测试，不生成额外交付文件；先展示修改供我审阅。',
+    '【代码注释】请按 annotate-project-zh 技能为整个项目的自有源码添加中文注释：每个文件使用“代码用途、输入文件、输入说明、输出文件、输出说明”五项文件头；每个函数使用“函数用途、输入说明、输出说明”三项注释，解释全部参数与必要专业术语。只修改源码注释，保持代码行为和现有字符串不变，不执行项目或测试，不生成额外交付文件；通过静态校验后自动应用，保留 Diff 和撤销记录。',
   analysis:
-    '【项目解析】请解析当前项目，梳理项目用途、目录结构、技术栈、主要模块与调用关系、安装配置和运行方式，生成清晰的中文项目说明文档。以实际代码为依据；需要补充文档文件时，先提出修改供我审阅。',
+    '【项目解析】请按 analyze-project-zh 为导入的整个项目生成项目说明.md，以及 docs/diagrams/README.md、architecture.png、workflow.png、sequence.png。参考本代码助手 README 与 docs 的组织形式，说明项目用途、功能、技术栈、目录、模块关系、安装配置、运行使用、验证方式和当前边界；三图分别说明系统架构、核心流程和典型调用时序。所有内容以目标项目实际代码为依据，不复制参考项目的技术结论，不覆盖 README.md，不运行项目或测试。文档包校验通过后默认接受并自动应用，保留 Diff、PNG 预览和撤销记录。',
 };
 const call = <T,>(method: string, path: string, body?: unknown) =>
   window.codeAssistant.request<T>(method, path, body);
@@ -30,7 +30,8 @@ const message = (error: unknown) =>
 const modeFor = (task: Task): HomeAction =>
   task.skill === 'annotate-project-zh'
     ? 'comment'
-    : /【项目解析】|项目说明文档|解析当前项目/.test(task.prompt)
+    : task.skill === 'analyze-project-zh' ||
+        /【项目解析】|项目说明文档|解析当前项目/.test(task.prompt)
       ? 'analysis'
       : 'comment';
 
@@ -64,6 +65,8 @@ export function App() {
   const [testEnabled, setTestEnabled] = useState(false);
   const [testCommand, setTestCommand] = useState('python -m pytest -q');
   const taskRef = useRef<Task | null>(null);
+  const removedTasks = useRef(new Set<string>());
+  const eventCursor = useRef({ taskId: '', lastId: 0 });
   const workspaceRef = useRef<string | null>(null);
   workspaceRef.current = workspace?.id || null;
   const busy = !!task && !terminal.has(task.status);
@@ -137,7 +140,15 @@ export function App() {
 
   const refreshTask = useCallback(
     async (id: string) => {
-      const updated = await call<Task>('GET', `/api/tasks/${id}`);
+      if (removedTasks.current.has(id)) return;
+      let updated: Task;
+      try {
+        updated = await call<Task>('GET', `/api/tasks/${id}`);
+      } catch (error) {
+        if (removedTasks.current.has(id)) return;
+        throw error;
+      }
+      if (removedTasks.current.has(id)) return;
       if (taskRef.current?.id === id) selectTask(updated);
       setTasks((previous) => previous.map((item) => (item.id === id ? updated : item)));
     },
@@ -147,16 +158,25 @@ export function App() {
   useEffect(() => {
     const id = task?.id;
     if (!id) {
+      eventCursor.current = { taskId: '', lastId: 0 };
       setActivity([]);
       setLogs('');
       return;
     }
     setActivity([]);
     setLogs('');
+    eventCursor.current = { taskId: id, lastId: 0 };
     const seen = new Set<number>();
     const remove = window.codeAssistant.onEvent((event) => {
-      if (event.task_id !== id || (event.id !== undefined && seen.has(event.id))) return;
+      if (
+        removedTasks.current.has(id) ||
+        event.task_id !== id ||
+        (event.id !== undefined && seen.has(event.id))
+      )
+        return;
       if (event.id !== undefined) seen.add(event.id);
+      if (event.id !== undefined && eventCursor.current.taskId === id)
+        eventCursor.current.lastId = Math.max(eventCursor.current.lastId, event.id);
       if (event.kind === 'model.delta') return;
       if (event.kind === 'command.output') {
         setLogs((previous) => (previous + (event.data.text || '')).slice(-200000));
@@ -275,12 +295,9 @@ export function App() {
           .startsWith(action === 'comment' ? '【代码注释】' : '【项目解析】')
           ? drafts[action].trim()
           : `${action === 'comment' ? '【代码注释】' : '【项目解析】'}\n${drafts[action].trim()}`,
-        skill: action === 'comment' ? 'annotate-project-zh' : null,
-        selected_file: action === 'comment' ? null : selectedFile,
-        test_argv:
-          action === 'analysis' && testEnabled
-            ? testCommand.trim().split(/\s+/).filter(Boolean)
-            : [],
+        skill: action === 'comment' ? 'annotate-project-zh' : 'analyze-project-zh',
+        selected_file: null,
+        test_argv: [],
       });
       selectTask(created);
       setTasks((previous) => [created, ...previous.filter((item) => item.id !== created.id)]);
@@ -330,6 +347,61 @@ export function App() {
     selectTask(null);
     setDrafts((previous) => ({ ...previous, [action]: presets[action] }));
     setError('');
+  }
+
+  async function resumeTask() {
+    const id = task?.id;
+    if (!id || busy || sending || operationPending) return;
+    setOperationPending(true);
+    setError('');
+    try {
+      const resumed = await call<Task>('POST', `/api/tasks/${id}/resume`);
+      const current = taskRef.current;
+      if (current?.id !== id) return;
+      selectTask({ ...current, ...resumed });
+      setTasks((previous) =>
+        previous.map((item) => (item.id === id ? { ...item, ...resumed } : item)),
+      );
+      // A terminal task's SSE subscription has already ended. Restart it without
+      // clearing the displayed history or replaying events we have received.
+      await window.codeAssistant.unwatchTask(id);
+      const after = eventCursor.current.taskId === id ? eventCursor.current.lastId : 0;
+      await window.codeAssistant.watchTask(id, after);
+      await refreshTask(id);
+    } catch (error) {
+      report(error);
+    } finally {
+      setOperationPending(false);
+    }
+  }
+
+  async function deleteTask(id: string) {
+    if (operationPending || sending) return;
+    const item = tasks.find((entry) => entry.id === id);
+    if (!item) return;
+    if (!terminal.has(item.status)) {
+      report('请先停止当前任务，再删除记录。');
+      return;
+    }
+    setOperationPending(true);
+    setError('');
+    removedTasks.current.add(id);
+    try {
+      await call('DELETE', `/api/tasks/${id}`);
+      setTasks((previous) => previous.filter((entry) => entry.id !== id));
+      if (taskRef.current?.id === id) {
+        selectTask(null);
+        setActivity([]);
+        setLogs('');
+        setDrafts((previous) => ({ ...previous, [action]: presets[action] }));
+        setTestEnabled(false);
+      }
+    } catch (error) {
+      removedTasks.current.delete(id);
+      report(error);
+    } finally {
+      setOperationPending(false);
+    }
   }
 
   return (
@@ -385,7 +457,9 @@ export function App() {
           onSettings={() => setSettingsOpen(true)}
           onStart={() => void start()}
           onLoadTask={(id) => void loadTask(id)}
+          onDeleteTask={(id) => void deleteTask(id)}
           onNewTask={newTask}
+          onResumeTask={() => void resumeTask()}
           onReview={(patchId, accept) =>
             void taskOperation(`/api/patches/${patchId}/review`, { accept })
           }

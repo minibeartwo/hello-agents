@@ -10,6 +10,8 @@ import tokenize
 from functools import lru_cache
 from pathlib import Path
 
+from .analysis_documents import ANALYSIS_SKILL, ANALYSIS_INSTRUCTIONS
+
 ANNOTATION_SKILL = "annotate-project-zh"
 SKILL_DIRECTORY = Path(__file__).resolve().parent.parent / "skills" / ANNOTATION_SKILL
 FILE_HEADER_FIELDS = ["代码用途", "输入文件", "输入说明", "输出文件", "输出说明"]
@@ -80,6 +82,8 @@ def annotation_read_hints(path: str, content: str) -> dict | None:
 def load_skill(skill: str | None) -> str:
     if skill is None:
         return ""
+    if skill == ANALYSIS_SKILL:
+        return ANALYSIS_INSTRUCTIONS
     if skill != ANNOTATION_SKILL:
         raise ValueError("不支持的技能。")
     return (SKILL_DIRECTORY / "SKILL.md").read_text(encoding="utf-8")
@@ -98,7 +102,7 @@ def validate_annotation_change(path: str, before: str | None, after: str | None)
     if suffix in {".json", ".jsonl", ".md", ".rst", ".txt"}:
         raise ValueError("注释技能不修改文档或严格 JSON 文件，也不生成额外交付文件。")
     if suffix not in {".py", ".pyi"}:
-        return  # Other languages remain subject to the skill and manual Diff review.
+        return  # Other languages follow the skill without Python-equivalent checks.
     if before.startswith("\ufeff") != after.startswith("\ufeff"):
         raise ValueError(f"{path} 必须保留原有 BOM 编码标记。")
     original, annotated = before.lstrip("\ufeff"), after.lstrip("\ufeff")

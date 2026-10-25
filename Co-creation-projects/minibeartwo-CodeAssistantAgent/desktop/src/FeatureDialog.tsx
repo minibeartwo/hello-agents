@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { HomeAction } from './ClientHome';
 import type { ModelSettings, Task, TaskEvent, Workspace } from './types';
 import './feature-dialog.css';
@@ -100,10 +100,149 @@ export interface FeatureDialogProps {
   onSettings: () => void;
   onStart: () => void;
   onLoadTask: (id: string) => void;
+  onDeleteTask: (id: string) => void;
   onNewTask: () => void;
   onReview: (patchId: string, accept: boolean) => void;
   onUndo: (patchId: string) => void;
   onCancel: () => void;
+  onResumeTask: () => void;
+}
+
+const finishedStatuses = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+  'budget_exhausted',
+  'rejected',
+]);
+
+function TaskHistory({
+  task,
+  tasks,
+  busy,
+  sending,
+  operationPending,
+  onLoadTask,
+  onNewTask,
+  onDeleteTask,
+}: Pick<
+  FeatureDialogProps,
+  | 'task'
+  | 'tasks'
+  | 'busy'
+  | 'sending'
+  | 'operationPending'
+  | 'onLoadTask'
+  | 'onNewTask'
+  | 'onDeleteTask'
+>) {
+  const [open, setOpen] = useState(false);
+  const menuId = useId();
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const locked = busy || sending || operationPending;
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', outside);
+    return () => document.removeEventListener('pointerdown', outside);
+  }, [open]);
+  const choose = (id?: string) => {
+    setOpen(false);
+    if (id) onLoadTask(id);
+    else onNewTask();
+    trigger.current?.focus();
+  };
+  return (
+    <div
+      className="feature-history"
+      ref={root}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && open) {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen(false);
+          trigger.current?.focus();
+        }
+      }}
+    >
+      <div className="feature-history-picker">
+        <span className="feature-history-label">任务记录</span>
+        <button
+          ref={trigger}
+          type="button"
+          className="task-history-trigger"
+          aria-label="历史任务"
+          aria-expanded={open}
+          aria-controls={menuId}
+          data-task-id={task?.id || ''}
+          disabled={sending || operationPending}
+          onClick={() => setOpen((previous) => !previous)}
+        >
+          <span>
+            {task
+              ? `${statusLabels[task.status] || task.status} · ${task.prompt.slice(0, 52)}`
+              : '新任务'}
+          </span>
+          <span aria-hidden="true">{open ? '▴' : '▾'}</span>
+        </button>
+        {open && (
+          <div id={menuId} className="task-history-menu">
+            <ul aria-label="任务记录列表">
+              <li>
+                <button
+                  className="task-history-select"
+                  type="button"
+                  disabled={locked}
+                  aria-current={!task ? 'true' : undefined}
+                  onClick={() => choose()}
+                >
+                  新任务
+                </button>
+              </li>
+              {tasks.map((item) => (
+                <li key={item.id} className="task-history-row" data-task-id={item.id}>
+                  <button
+                    className="task-history-select"
+                    type="button"
+                    disabled={locked}
+                    aria-current={task?.id === item.id ? 'true' : undefined}
+                    title={item.prompt}
+                    onClick={() => choose(item.id)}
+                  >
+                    <span>{statusLabels[item.status] || item.status}</span>
+                    <span>{item.prompt.slice(0, 80)}</span>
+                  </button>
+                  <button
+                    className="task-history-delete"
+                    type="button"
+                    aria-label={`删除任务：${item.prompt.slice(0, 52)}`}
+                    title={
+                      finishedStatuses.has(item.status)
+                        ? '删除此任务记录'
+                        : '请先停止任务，再删除记录'
+                    }
+                    disabled={sending || operationPending || !finishedStatuses.has(item.status)}
+                    onClick={() => onDeleteTask(item.id)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+              {tasks.length === 0 && <li className="task-history-empty">暂无历史任务</li>}
+            </ul>
+            <p>删除会清除进度、Diff 与撤销记录，不会回滚已应用的代码修改。</p>
+          </div>
+        )}
+      </div>
+      <button type="button" className="secondary" disabled={locked} onClick={() => choose()}>
+        新建任务
+      </button>
+    </div>
+  );
 }
 
 function activityText(event: TaskEvent) {
@@ -142,15 +281,23 @@ export function FeatureDialog(props: FeatureDialogProps) {
     onSettings,
     onStart,
     onLoadTask,
+    onDeleteTask,
     onNewTask,
     onReview,
     onUndo,
     onCancel,
+    onResumeTask,
   } = props;
   const dialog = useDialogFocus<HTMLDivElement>(onClose);
   const title = action === 'comment' ? '代码注释' : '项目解析';
   const locked = busy || sending || operationPending;
   const annotationSkill = action === 'comment' && (!task || task.skill === 'annotate-project-zh');
+  const documentationSkill =
+    action === 'analysis' && (!task || task.skill === 'analyze-project-zh');
+  const canResume =
+    task?.skill === 'annotate-project-zh' &&
+    ['cancelled', 'interrupted', 'failed', 'budget_exhausted'].includes(task.status);
+  const resumeBudgetReached = !!task && !!settings && task.steps >= settings.max_steps;
   const progressList = useRef<HTMLOListElement>(null);
   const followProgress = useRef(true);
   useLayoutEffect(() => {
@@ -170,7 +317,7 @@ export function FeatureDialog(props: FeatureDialogProps) {
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className={`feature-dialog feature-${action}`}
+        className={`feature-dialog feature-${action} ${task ? 'has-task' : 'is-draft'}`}
       >
         <header className="feature-heading">
           <div>
@@ -191,8 +338,8 @@ export function FeatureDialog(props: FeatureDialogProps) {
             <div className="feature-project" title={workspace.root}>
               <strong>{workspace.name}</strong>
               <span>
-                {annotationSkill
-                  ? '注释范围：整个项目的自有源码'
+                {annotationSkill || documentationSkill
+                  ? `${annotationSkill ? '注释' : '解析'}范围：整个项目的自有源码`
                   : selectedFile
                     ? `当前文件：${selectedFile}`
                     : '使用整个项目上下文'}
@@ -202,10 +349,20 @@ export function FeatureDialog(props: FeatureDialogProps) {
                   请求超时会持续重试，等待不消耗步数且不受任务总时限中止，可随时停止当前任务。
                 </span>
               )}
+              {documentationSkill && (
+                <span role="note">
+                  输出：项目说明.md，以及 docs/diagrams/ 中的说明、架构图、流程图和时序图（PNG）。
+                </span>
+              )}
+              {documentationSkill && (
+                <span role="note">
+                  根据实际代码静态解析，不运行项目；文档包校验通过后自动接受并应用，保留 Diff、图片预览和撤销记录。
+                </span>
+              )}
               {annotationSkill && (
                 <span role="note">
-                  按 annotate-project-zh
-                  添加文件头与逐函数注释，校验后自动应用；保留 Diff 和撤销记录，不运行项目。
+                  按 annotate-project-zh 添加文件头与逐函数注释，校验后自动应用；保留 Diff
+                  和撤销记录，不运行项目。
                 </span>
               )}
             </div>
@@ -218,29 +375,16 @@ export function FeatureDialog(props: FeatureDialogProps) {
               {settings?.model || '连接模型'}
             </button>
           </div>
-          <div className="feature-history">
-            <label>
-              任务记录
-              <select
-                aria-label="历史任务"
-                value={task?.id || ''}
-                disabled={locked}
-                onChange={(event) =>
-                  event.target.value ? onLoadTask(event.target.value) : onNewTask()
-                }
-              >
-                <option value="">新任务</option>
-                {tasks.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {statusLabels[item.status] || item.status} · {item.prompt.slice(0, 52)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button type="button" className="secondary" disabled={locked} onClick={onNewTask}>
-              新建任务
-            </button>
-          </div>
+          <TaskHistory
+            task={task}
+            tasks={tasks}
+            busy={busy}
+            sending={sending}
+            operationPending={operationPending}
+            onLoadTask={onLoadTask}
+            onNewTask={onNewTask}
+            onDeleteTask={onDeleteTask}
+          />
           <form
             className="feature-request"
             onSubmit={(event) => {
@@ -263,7 +407,7 @@ export function FeatureDialog(props: FeatureDialogProps) {
             />
             {!task && (
               <>
-                {action === 'analysis' && (
+                {action === 'analysis' && !documentationSkill && (
                   <>
                     <label className="feature-test-toggle">
                       <input
@@ -289,7 +433,11 @@ export function FeatureDialog(props: FeatureDialogProps) {
                 <div className="feature-start-row">
                   <span>
                     {settings?.model
-                      ? '修改将先展示，确认后写入项目。'
+                      ? annotationSkill
+                        ? '注释校验通过后自动应用，可查看 Diff 并撤销。'
+                        : documentationSkill
+                          ? '文档包校验通过后自动应用，生成项目说明和三张 PNG，可撤销。'
+                          : '修改将先展示，确认后写入项目。'
                       : '先连接模型，再开始处理。'}
                   </span>
                   <button
@@ -328,7 +476,24 @@ export function FeatureDialog(props: FeatureDialogProps) {
                     停止当前任务
                   </button>
                 )}
+                {canResume && (
+                  <button
+                    type="button"
+                    className="primary resume-task"
+                    disabled={locked || !settings || resumeBudgetReached}
+                    onClick={onResumeTask}
+                  >
+                    {operationPending ? '正在恢复…' : '继续执行'}
+                  </button>
+                )}
               </div>
+              {canResume && (
+                <p className="feature-resume-hint">
+                  {resumeBudgetReached
+                    ? '已达到执行步数上限，请先在模型设置中提高步数，再继续执行。'
+                    : '沿用此任务的历史、已用步数和已应用修改，使用当前模型配置继续处理。'}
+                </p>
+              )}
               {activity.length > 0 && (
                 <ol
                   ref={progressList}
@@ -370,7 +535,14 @@ export function FeatureDialog(props: FeatureDialogProps) {
               aria-label={`修改审阅 ${patchIndex + 1}`}
             >
               <div className="feature-section-title">
-                <h3>{task.skill === 'annotate-project-zh' ? '注释修改记录' : '修改审阅'} · {patch.changes.length} 个文件</h3>
+                <h3>
+                  {task.skill === 'annotate-project-zh'
+                    ? '注释修改记录'
+                    : task.skill === 'analyze-project-zh'
+                      ? '文档修改记录'
+                      : '修改审阅'} ·{' '}
+                  {patch.changes.length} 个文件
+                </h3>
                 <span className={`patch-status ${patch.status}`}>
                   {patchLabels[patch.status] || patch.status}
                 </span>
@@ -379,13 +551,40 @@ export function FeatureDialog(props: FeatureDialogProps) {
                 <details key={change.path} className="patch-file" open={index === 0}>
                   <summary>
                     {change.path}
+                    {change.encoding === 'base64' && change.mime_type === 'image/png'
+                      ? ' · PNG'
+                      : ''}
                     <span>
                       {change.before === null ? '新增' : change.after === null ? '删除' : '修改'}
                     </span>
                   </summary>
-                  <pre className="patch-diff" aria-label={`${change.path} 的修改内容`}>
-                    {change.diff || (change.after ?? change.before ?? '没有文本差异')}
-                  </pre>
+                  {change.encoding === 'base64' ? (
+                    change.mime_type === 'image/png' ? (
+                      <div className="patch-image-preview" aria-label={`${change.path} 的图片修改`}>
+                        {(['before', 'after'] as const).map((side) => (
+                          <figure key={side}>
+                            <figcaption>{side === 'before' ? '修改前' : '修改后'}</figcaption>
+                            {change[side] === null ? (
+                              <p>{side === 'before' ? '原文件不存在' : '文件将被删除'}</p>
+                            ) : (
+                              <img
+                                src={`data:image/png;base64,${change[side]}`}
+                                alt={`${change.path} ${side === 'before' ? '修改前' : '修改后'} PNG 预览`}
+                                loading="lazy"
+                                decoding="async"
+                              />
+                            )}
+                          </figure>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="patch-binary-note">二进制文件，当前仅支持 PNG 预览。</p>
+                    )
+                  ) : (
+                    <pre className="patch-diff" aria-label={`${change.path} 的修改内容`}>
+                      {change.diff || (change.after ?? change.before ?? '没有文本差异')}
+                    </pre>
+                  )}
                 </details>
               ))}
               <div className="patch-actions">

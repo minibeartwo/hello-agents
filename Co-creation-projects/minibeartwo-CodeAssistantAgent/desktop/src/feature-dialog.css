@@ -21,6 +21,120 @@
   flex-direction: column;
   overflow: hidden;
 }
+html.is-maximized .feature-shade {
+  padding: clamp(16px, 2vw, 32px);
+}
+html.is-maximized .feature-dialog {
+  width: min(1600px, 78%);
+  height: 80%;
+  max-height: 80%;
+  font-size: 22px;
+}
+html.is-maximized .feature-scroll {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 32px 28px;
+}
+html.is-maximized .feature-scroll > * {
+  flex-shrink: 0;
+}
+html.is-maximized .feature-heading {
+  padding: 20px 32px;
+}
+html.is-maximized .feature-heading h2 {
+  font-size: 36px;
+}
+html.is-maximized .feature-eyebrow {
+  font-size: 14px;
+}
+html.is-maximized .feature-close {
+  width: 44px;
+  height: 44px;
+  font-size: 34px;
+}
+html.is-maximized .feature-project strong {
+  font-size: 26px;
+}
+html.is-maximized
+  .feature-dialog
+  :is(
+    .feature-project > span,
+    .feature-history-label,
+    .feature-input-label,
+    .feature-test-toggle,
+    .feature-start-row > span,
+    .feature-resume-hint
+  ) {
+  font-size: 18px;
+  line-height: 1.6;
+}
+html.is-maximized .feature-dialog :is(.primary, .secondary, .task-history-trigger) {
+  min-height: 46px;
+}
+html.is-maximized .feature-history > button {
+  margin-top: 36px;
+}
+html.is-maximized .task-history-menu p,
+html.is-maximized .task-history-empty {
+  font-size: 17px;
+}
+html.is-maximized .task-history-delete {
+  width: 42px;
+  height: 42px;
+  font-size: 30px;
+}
+html.is-maximized .feature-context .model-button {
+  flex-shrink: 0;
+}
+html.is-maximized .feature-dialog :is(.feature-section-title h3, .feature-output h3) {
+  font-size: 22px;
+}
+html.is-maximized
+  .feature-dialog
+  :is(.feature-step-count, .task-status, .patch-status, .patch-file summary > span) {
+  font-size: 17px;
+}
+html.is-maximized
+  .feature-dialog
+  :is(.feature-activity, .patch-file summary, .patch-diff, .terminal-output) {
+  font-size: 20px;
+  line-height: 1.7;
+}
+html.is-maximized .feature-request textarea {
+  height: clamp(110px, 12vh, 170px);
+  max-height: max(170px, 24vh);
+  padding: 16px 18px;
+}
+html.is-maximized .feature-dialog.is-draft .feature-request {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+  min-height: 290px;
+}
+html.is-maximized .feature-dialog.is-draft .feature-request textarea {
+  flex: 1;
+  height: auto;
+  min-height: 180px;
+  max-height: none;
+  resize: none;
+}
+html.is-maximized .feature-task {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+html.is-maximized .feature-activity {
+  flex: 1 0 240px;
+  max-height: clamp(220px, 38vh, 640px);
+  padding-left: 4em;
+}
+html.is-maximized .patch-diff {
+  max-height: clamp(285px, 45vh, 900px);
+}
+html.is-maximized .terminal-output {
+  max-height: clamp(200px, 35vh, 600px);
+}
 .feature-analysis {
   border-color: #f4d69a;
   box-shadow:
@@ -98,25 +212,105 @@
 }
 .feature-history {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 12px;
   margin-bottom: 17px;
 }
-.feature-history label {
+.feature-history-picker {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 7px;
-  font-size: 12px;
   color: #b6d7ed;
 }
-.feature-history select {
+.feature-history-label {
+  font-size: 12px;
+  line-height: 17px;
+}
+.task-history-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   width: 100%;
   min-width: 0;
   padding: 8px 10px;
+  border: 1px solid #5a94c97a;
+  background: #051b3edb;
+  border-radius: 7px;
+  text-align: left;
+}
+.task-history-trigger > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-history-menu {
+  padding: 6px;
+  border: 1px solid #81bbf059;
+  border-radius: 9px;
+  background: #06234a;
+}
+.task-history-menu ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: min(260px, 30vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.task-history-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.task-history-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 5px;
+  text-align: left;
+}
+.task-history-select > span:first-child {
+  flex-shrink: 0;
+  color: #8dcdf8;
+}
+.task-history-select > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-history-select[aria-current='true'],
+.task-history-select:hover:not(:disabled) {
+  background: #27639b77;
+}
+.task-history-delete {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  color: #ffbbb5;
+  font-size: 24px;
+  line-height: 1;
+}
+.task-history-delete:hover:not(:disabled) {
+  background: #a93c454f;
+}
+.task-history-menu p,
+.task-history-empty {
+  margin: 7px 4px 3px;
+  color: #93bede;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .feature-history > button {
+  margin-top: 24px;
   white-space: nowrap;
 }
 .feature-input-label {
@@ -198,6 +392,12 @@
   color: #8fb6d6;
   font-size: 11px;
   margin-left: auto;
+}
+.feature-resume-hint {
+  margin: 12px 0 0;
+  color: #a7cee9;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .task-status,
 .patch-status {
@@ -629,4 +829,35 @@
     padding-top: 12px;
     padding-bottom: 12px;
   }
+}
+
+.patch-image-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  gap: 12px;
+  padding: 12px;
+  background: #061a35;
+}
+.patch-image-preview figure {
+  margin: 0;
+  min-width: 0;
+}
+.patch-image-preview figcaption {
+  margin-bottom: 8px;
+  color: #acd9f6;
+  font-size: 13px;
+}
+.patch-image-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid #8bd3ff55;
+  border-radius: 8px;
+  background: #fff;
+}
+.patch-image-preview p,
+.patch-binary-note {
+  padding: 14px;
+  color: #99b8d0;
+  font-size: 13px;
 }

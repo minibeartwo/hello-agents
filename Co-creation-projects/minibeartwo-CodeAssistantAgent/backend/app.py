@@ -37,7 +37,7 @@ class NewTask(BaseModel):
     prompt: str = Field(min_length=1, max_length=12000)
     selected_file: str | None = None
     test_argv: list[str] = Field(default_factory=list, max_length=30)
-    skill: Literal["annotate-project-zh"] | None = None
+    skill: Literal["annotate-project-zh", "analyze-project-zh"] | None = None
 
 
 class ModelSettings(BaseModel):
@@ -217,6 +217,14 @@ def create_app(data_dir: Path | None = None, token: str | None = None, model_fac
     async def cancel_task(task_id: str):
         return public_task(await runtime.cancel(task_id))
 
+    @app.post("/api/tasks/{task_id}/resume", status_code=202)
+    async def resume_task(task_id: str):
+        return public_task(await runtime.resume(task_id))
+
+    @app.delete("/api/tasks/{task_id}")
+    async def delete_task(task_id: str):
+        return await runtime.delete(task_id)
+
     @app.get("/api/tasks/{task_id}/events")
     async def events(task_id: str, request: Request, after: int = 0):
         store.one("tasks", task_id)
@@ -233,7 +241,8 @@ def create_app(data_dir: Path | None = None, token: str | None = None, model_fac
                 for event in batch:
                     cursor = event["id"]
                     yield f"id: {cursor}\nevent: update\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if not batch and store.one("tasks", task_id)["status"] in TERMINAL:
+                current = store.rows("SELECT status FROM tasks WHERE id=?", (task_id,))
+                if not current or (not batch and current[0]["status"] in TERMINAL):
                     return
                 idle += 1
                 if idle % 40 == 0:

@@ -62,7 +62,11 @@ class Workspace:
         return {"path": path.relative_to(self.root).as_posix(), "hash": digest(content), "content": content}
 
     def tree(self, relative: str = "") -> list[dict]:
-        parent = self.root if not relative else self.path(relative)
+        if not isinstance(relative, str):
+            raise ValueError("目录路径必须是字符串；列出项目根目录请使用空字符串或点号。")
+        # Listing the root is valid; file reads and writes still use path(),
+        # which deliberately rejects the workspace directory itself.
+        parent = self.root if relative in {"", ".", "./", ".\\"} else self.path(relative)
         if not parent.is_dir():
             raise ValueError("目录不存在。")
         entries = []

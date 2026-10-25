@@ -130,6 +130,23 @@ def test_patch_review_runs_real_tests_replays_events_and_undoes(tmp_path, header
         assert "messages" not in history[0]
 
 
+@pytest.mark.parametrize("alias", ["", ".", "./", ".\\"])
+def test_root_directory_listing_accepts_root_aliases_without_opening_file_boundaries(tmp_path, headers, alias):
+    app, _ = configured_app(tmp_path, [])
+    with TestClient(app, headers=headers) as client:
+        root, workspace_id = open_workspace(client, tmp_path)
+        (root / 'main.py').write_text('value = 1\n', encoding='utf-8')
+        (root / '.env').write_text('SECRET=hidden', encoding='utf-8')
+        (root / '.git').mkdir()
+        base = f'/api/workspaces/{workspace_id}'
+        listed = client.get(base + '/tree', params={'path': alias})
+        assert listed.status_code == 200, listed.text
+        assert [entry['path'] for entry in listed.json()] == ['main.py']
+        assert client.get(base + '/file', params={'path': '.'}).status_code == 400
+        for outside in ['..', '../outside', str(root.parent), '.git']:
+            assert client.get(base + '/tree', params={'path': outside}).status_code == 400
+
+
 def test_review_conflict_preserves_external_edit_and_regenerates(tmp_path, headers):
     before, external, final = "old\n", "external edit\n", "external edit\nfixed\n"
     script = [action("propose_patch", changes=[{"path": "file.txt", "base_hash": digest(before), "content": "obsolete\n"}]),

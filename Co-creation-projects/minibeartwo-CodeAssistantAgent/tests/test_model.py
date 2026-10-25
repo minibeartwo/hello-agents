@@ -47,7 +47,7 @@ def test_action_parser_preserves_patch_content_with_nested_json_and_code_fences(
 
 
 @pytest.mark.parametrize("finish_reason", ["stop", "length"])
-@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("native", [False, True, "multiple"])
 async def test_helloagents_real_streaming_adapter(finish_reason, native):
     requests = []
     response = json.dumps({"action": "final", "args": {"message": "本地协议测试通过。"}})
@@ -70,6 +70,11 @@ async def test_helloagents_real_streaming_adapter(finish_reason, native):
                         part.update(id="actual-call-id", type="function")
                         part["function"]["name"] = "submit_action"
                     delta = {"content": "<result>fabricated output</result>", "tool_calls": [part]}
+                    if native == "multiple":
+                        other = {"index": 1, "function": dict(part["function"])}
+                        if index == 0:
+                            other.update(id="second-call-id", type="function")
+                        delta["tool_calls"].append(other)
                 chunk = {"id": "local-test", "object": "chat.completion.chunk", "created": 0, "model": "protocol-test", "choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
                 self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
             ending = {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if native and finish_reason == "stop" else finish_reason}]}
@@ -90,6 +95,10 @@ async def test_helloagents_real_streaming_adapter(finish_reason, native):
         if finish_reason == "length":
             with pytest.raises(ModelOutputTruncated, match="截断"):
                 await model.generate([{"role": "user", "content": "hello JSON"}], emit)
+        elif native == "multiple":
+            with pytest.raises(ActionFormatError, match="仅允许一个原生工具调用"):
+                await model.generate([{"role": "user", "content": "hello JSON"}], emit)
+            assert model.llm.last_tool_call is None
         else:
             result = await model.generate([{"role": "user", "content": "hello JSON"}], emit)
             assert parse_action(result)["args"]["message"] == "本地协议测试通过。"
@@ -104,8 +113,9 @@ async def test_helloagents_real_streaming_adapter(finish_reason, native):
         assert requests[0]["stream"] is True and requests[0]["model"] == "protocol-test"
         assert requests[0]["tools"][0]["function"]["name"] == "submit_action"
         assert requests[0]["tool_choice"]["function"]["name"] == "submit_action"
+        assert requests[0]["parallel_tool_calls"] is False
         assert "response_format" not in requests[0]
-        if finish_reason == "stop":
+        if finish_reason == "stop" and native != "multiple":
             assert emitted and emitted[0][0] == "model.delta"
     finally:
         model.close()
